@@ -25,7 +25,7 @@ def get_glance_map(year):
     collection_id = "projects/GLANCE/DATASETS/V001"
     class_band = "LC"
 
-    # 2. Define Visualization Parameters (Official GLANCE Legend)
+    # 2. Define Visualization Parameters according to the Official GLANCE Legend
     vis_params = {
         'min': 1,
         'max': 7,
