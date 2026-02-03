@@ -134,6 +134,67 @@ def get_glance_map(year):
         print(f"Error loading GLANCE data for {year}: {e}")
         return None
 
+def view_local_rasters(input_dir=DEFAULT_INPUT_DIR):
+    """
+    Creates an interactive map displaying all .tif files found in the specified directory.
+    This is useful for visually validating the result of the masking process.
+
+    Parameters
+    ----------
+    input_dir : str, optional
+        The directory path containing the masked .tif files.
+        Defaults to DEFAULT_INPUT_DIR.
+
+    Returns
+    -------
+    geemap.Map
+        An interactive map object with the raster layers added.
+        Returns None if no .tif files are found.
+    """
+    # 1. Initialize Map
+    m = geemap.Map()
+    
+    # 2. Search for files
+    search_pattern = os.path.join(input_dir, "*.tif")
+    files = sorted(glob.glob(search_pattern))
+    
+    if not files:
+        print(f"No .tif files found in {input_dir}")
+        return None
+
+    # 3. Prepare Colors (Palette)
+    # Extract colors from metadata to match the charts.
+    # We pass the list of hex codes (e.g., ['#0000FF', ...])
+    class_ids = sorted(GLANCE_METADATA.keys())
+    palette = [GLANCE_METADATA[i]['color'] for i in class_ids]
+    
+    # 4. Add each file as a Layer
+    print(f"Loading {len(files)} local raster layers...")
+    
+    for filepath in files:
+        filename = os.path.basename(filepath)
+        year_match = re.search(r"(\d{4})", filename)
+        layer_name = f"Masked {year_match.group(1)}" if year_match else filename
+        
+        try:
+            m.add_raster(
+                filepath, 
+                layer_name=layer_name, 
+                palette=palette,  # Tries to apply the specific class colors
+                nodata=NODATA_VALUE
+            )
+        except Exception as e:
+            print(f"Could not load {filename}: {e}")
+
+    # 5. Add Legend
+    legend_dict = {
+        meta['name']: meta['color'] 
+        for meta in GLANCE_METADATA.values()
+    }
+    m.add_legend(title="Classes", legend_dict=legend_dict)
+
+    return m
+
 ###############################################################################
 #                                                                             #
 #                  4. ANALYSIS FUNCTIONS (LOCAL RASTER)                       #
