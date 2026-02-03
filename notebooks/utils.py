@@ -627,3 +627,104 @@ def calculate_global_transition_matrix(year_list, scale=300):
         print(f"Successfully computed: {label}")
 
     return all_results
+
+###############################################################################
+#                                                                             #
+#                  5.1 TRANSITION MATRIX                                      #
+#                                                                             #
+###############################################################################
+def export_global_transition_tasks(
+    year_list,
+    drive_folder="GLANCE_Transitions",
+    scale=30
+):
+    """
+    Triggers asynchronous GEE tasks to export global transition matrices.
+
+    Each task computes a frequency histogram for a year pair and saves 
+    the result as a CSV file in a specific Google Drive folder.
+
+    Parameters
+    ----------
+    year_list : list of int
+        List of years to process (e.g., [2001, 2010, 2019]).
+    drive_folder : str, optional
+        Name of the folder in Google Drive to save the CSVs. 
+        Defaults to "GLANCE_Transitions".
+    scale : int, optional
+        Spatial resolution in meters. Use 30 for native resolution. 
+        Defaults to 30.
+
+    Returns
+    -------
+    list of ee.batch.Task
+        A list of triggered Earth Engine Task objects for monitoring.
+    """
+    # 1. Initialize Earth Engine resources using constants from utils.py
+    collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
+    global_geom = ee.Geometry.Rectangle(
+        [-180, -90, 180, 90], 
+        'EPSG:4326', 
+        False
+    )
+    
+    # 2. Define transition pairs (consecutive intervals)
+    pairs = [
+        (year_list[i], year_list[i+1]) 
+        for i in range(len(year_list) - 1)
+    ]
+    
+    # 3. Add long-term transition pair (First Year to Last Year)
+    if len(year_list) > 2:
+        pairs.append(
+            (year_list[0], year_list[-1])
+        )
+    
+    triggered_tasks = []
+
+    # 4. Iterate through each pair to define and start export tasks
+    for y1, y2 in pairs:
+        label = f"transition_{y1}_{y2}"
+        
+        # 5. Filter and mosaic images for the start and end years
+        img_start = collection.filterDate(
+            f"{y1}-01-01", 
+            f"{y1}-12-31"
+        ).mosaic().select(GLANCE_CLASS_BAND)
+        
+        img_end = collection.filterDate(
+            f"{y2}-01-01", 
+            f"{y2}-12-31"
+        ).mosaic().select(GLANCE_CLASS_BAND)
+
+        # 6. Create transition image: (Start * 100) + End
+        transition_image = img_start.multiply(100).add(img_end)
+
+        # 7. Reduce the image to a frequency histogram (Table format)
+        # Using a Feature to wrap the result for CSV export
+        transition_stats = transition_image.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=global_geom,
+            scale=scale,
+            maxPixels=1e13
+        )
+
+        # 8. Create a feature collection with the statistics for export
+        feature = ee.Feature(None, transition_stats)
+        fc = ee.FeatureCollection([feature])
+
+        # 9. Configure the Batch Export Task to Google Drive
+        task = ee.batch.Export.table.toDrive(
+            collection=fc,
+            description=label,
+            folder=drive_folder,
+            fileNamePrefix=label,
+            fileFormat='CSV'
+        )
+
+        # 10. Start the task on the server and store the object
+        task.start()
+        triggered_tasks.append(task)
+        print(f"Task started for {label} (Scale: {scale}m)")
+
+    return triggered_tasks
