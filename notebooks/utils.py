@@ -542,80 +542,88 @@ def process_and_plot_pixel_counts(
 #                  5. TRANSITION MATRIX                                       #
 #                                                                             #
 ###############################################################################
-import ee
-import pandas as pd
-import utils
-
-def calculate_global_transition_matrix(year_start=2001, year_end=2002, scale=1000):
+def calculate_global_transition_matrix(year_list, scale=300):
     """
-    Calculates a global transition matrix between two years using GEE.
+    Calculates global transition matrices for all consecutive years in a list,
+    plus the long-term transition between the first and last years.
 
     This function performs the calculation entirely on the Earth Engine 
-    servers. It creates a transition image where the values represent 
-    pairs of classes (e.g., class 5 to 1 becomes 501).
+    servers. It creates transition images where values represent pairs 
+    of classes (e.g., class 5 to 1 becomes 501) using a 100x multiplier.
 
     Parameters
     ----------
-    year_start : int, optional
-        Initial year for the transition analysis. Defaults to 2001.
-    year_end : int, optional
-        Final year for the transition analysis. Defaults to 2002.
+    year_list : list of int
+        List of years to process (e.g., [2001, 2010, 2019]).
     scale : int, optional
         The pixel scale in meters for the global reduction. 
         Note: scale=30 is native but may time out with getInfo(). 
-        Defaults to 1000 for faster global estimation.
+        Defaults to 1000.
 
     Returns
     -------
-    pd.DataFrame
-        A pivot table representing the transition matrix with class names.
+    dict of pd.DataFrame
+        A dictionary where keys are strings "YYYY_YYYY" and values are 
+        pivot tables representing the transition matrix with class names.
     """
-    # 1. Load the GLANCE collection and select the LC band
-    collection = ee.ImageCollection(utils.GLANCE_COLLECTION_ID)
-    
-    # 2. Filter images and create mosaics
-    img_start = collection.filterDate(f"{year_start}-01-01", f"{year_start}-12-31") \
-                          .mosaic() \
-                          .select(utils.GLANCE_CLASS_BAND)
-                          
-    img_end = collection.filterDate(f"{year_end}-01-01", f"{year_end}-12-31") \
-                        .mosaic() \
-                        .select(utils.GLANCE_CLASS_BAND)
-
-    # 3. Compute transitions: (StartYear * 100) + EndYear
-    # Using 100 as multiplier to accommodate future class expansions
-    transition_image = img_start.multiply(100).add(img_end)
-
-    # 4. Perform global reduction
-    # Global geometry covering the entire Earth
+    # 1. Initialize core Earth Engine components
+    collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
     global_geom = ee.Geometry.Rectangle([-180, -90, 180, 90], 'EPSG:4326', False)
+    class_names = {k: v['name'] for k, v in GLANCE_METADATA.items()}
     
-    stats = transition_image.reduceRegion(
-        reducer=ee.Reducer.frequencyHistogram(),
-        geometry=global_geom,
-        scale=scale,
-        maxPixels=1e13
-    ).get(utils.GLANCE_CLASS_BAND).getInfo()
+    # 2. Define transition pairs (consecutive intervals)
+    pairs = [(year_list[i], year_list[i+1]) for i in range(len(year_list) - 1)]
+    
+    # 3. Add long-term transition (First Year to Last Year)
+    if len(year_list) > 2:
+        pairs.append((year_list[0], year_list[-1]))
+    
+    all_results = {}
 
-    # 5. Format results using metadata from utils.py
-    records = []
-    class_names = {k: v['name'] for k, v in utils.GLANCE_METADATA.items()}
-
-    for code, count in stats.items():
-        code_int = int(float(code))
-        id_from = code_int // 100
-        id_to = code_int % 100
+    # 4. Iterate through each year pair for processing
+    for y1, y2 in pairs:
+        label = f"{y1}_{y2}"
         
-        # Ensure we only include valid classes from metadata
-        if id_from in class_names and id_to in class_names:
-            records.append({
-                "From": class_names[id_from],
-                "To": class_names[id_to],
-                "Pixels": int(count)
-            })
+        # 5. Filter images and create mosaics for the pair
+        img_start = collection.filterDate(f"{y1}-01-01", f"{y1}-12-31") \
+                              .mosaic() \
+                              .select(GLANCE_CLASS_BAND)
+                              
+        img_end = collection.filterDate(f"{y2}-01-01", f"{y2}-12-31") \
+                            .mosaic() \
+                            .select(GLANCE_CLASS_BAND)
 
-    # 6. Create DataFrame and Pivot Matrix
-    df_results = pd.DataFrame(records)
-    matrix = df_results.pivot(index="From", columns="To", values="Pixels").fillna(0)
-    
-    return matrix
+        # 6. Compute transitions: (StartYear * 100) + EndYear
+        transition_image = img_start.multiply(100).add(img_end)
+
+        # 7. Perform global reduction to get frequency histogram
+        stats = transition_image.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=global_geom,
+            scale=scale,
+            maxPixels=1e13
+        ).get(GLANCE_CLASS_BAND).getInfo()
+
+        # 8. Process histogram data into list of records
+        records = []
+        for code, count in stats.items():
+            code_int = int(float(code))
+            id_from = code_int // 100
+            id_to = code_int % 100
+            
+            if id_from in class_names and id_to in class_names:
+                records.append({
+                    "From": class_names[id_from],
+                    "To": class_names[id_to],
+                    "Pixels": int(count)
+                })
+
+        # 9. Convert records to DataFrame and pivot into Matrix
+        if records:
+            df_temp = pd.DataFrame(records)
+            matrix = df_temp.pivot(index="From", columns="To", values="Pixels").fillna(0)
+            all_results[label] = matrix
+        
+        print(f"Successfully computed: {label}")
+
+    return all_results
