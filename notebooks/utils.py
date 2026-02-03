@@ -1,5 +1,71 @@
+import os
+import re
+import glob
 import ee
 import geemap
+import numpy as np
+import pandas as pd
+import rasterio
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
+###############################################################################
+#                                                                             #
+#                1. GLOBAL CONFIGURATION & CONSTANTS                          #
+#                                                                             #
+###############################################################################
+
+# 1. Directory Definitions
+DEFAULT_INPUT_DIR = "/content/glance_data/masked"
+DEFAULT_OUTPUT_DIR = "/content/glance_data/output"
+
+# 2. Data Definitions
+NODATA_VALUE = 255
+GLANCE_COLLECTION_ID = "projects/GLANCE/DATASETS/V001"
+GLANCE_CLASS_BAND = "LC"
+
+# 3. Class Metadata
+GLANCE_METADATA = {
+    1: {'name': 'Water',      'color': '#0000FF'},
+    2: {'name': 'Ice/Snow',   'color': '#AAAAFF'},
+    3: {'name': 'Developed',  'color': '#FF0000'},
+    4: {'name': 'Barren',     'color': '#964B00'},
+    5: {'name': 'Trees',      'color': '#006400'},
+    6: {'name': 'Shrub',      'color': '#FFBB22'},
+    7: {'name': 'Herbaceous', 'color': '#FFFF4C'}
+}
+
+###############################################################################
+#                                                                             #
+#                  2. HELPER FUNCTIONS (FILE & SYSTEM)                        #
+#                                                                             #
+###############################################################################
+
+def get_year_from_filename(filepath):
+    """
+    Extracts the 4-digit year from the filename using a regular expression.
+
+    Parameters
+    ----------
+    filepath : str
+        The full path or filename of the raster image (e.g., '/path/to/glance_2005.tif').
+
+    Returns
+    -------
+    int
+        The 4-digit year extracted from the filename. Returns 0 if no pattern matches.
+    """
+    filename = os.path.basename(filepath)
+    match = re.search(r"(\d{4})\.tif$", filename)
+    if match:
+        return int(match.group(1))
+    return 0
+
+###############################################################################
+#                                                                             #
+#                  3. VISUALIZATION FUNCTIONS (EARTH ENGINE)                  #
+#                                                                             #
+###############################################################################
 
 def get_glance_map(year):
     """
@@ -21,51 +87,398 @@ def get_glance_map(year):
         layer added. Returns None if data cannot be loaded.
     """
 
-    # 1. Define the GLANCE Collection and Classification Band
-    collection_id = "projects/GLANCE/DATASETS/V001"
-    class_band = "LC"
-
-    # 2. Define Visualization Parameters according to the Official GLANCE Legend
+    # 1. Dynamic Visualization Parameters construction
+    # Extract IDs to sort correctly
+    class_ids = sorted(GLANCE_METADATA.keys())
+    
+    # Earth Engine expects hex colors without '#', so we strip it
+    palette = [GLANCE_METADATA[i]['color'].lstrip('#') for i in class_ids]
+    
     vis_params = {
-        'min': 1,
-        'max': 7,
-        'palette': [
-            '0000FF', # 1. Water
-            'AAAAFF', # 2. Ice/Snow
-            'FF0000', # 3. Developed
-            '964B00', # 4. Barren
-            '006400', # 5. Trees
-            'FFBB22', # 6. Shrub
-            'FFFF4C'  # 7. Herbaceous
-        ]
+        'min': class_ids[0],
+        'max': class_ids[-1],
+        'palette': palette
     }
 
-    # 3. Create the Map Object
+    # 2. Initialize Map
     m = geemap.Map()
     m.setCenter(0, 20, 2)
 
-    # 4. Filter and Select the Data
+    # 3. Filter Data
     start_date = f"{year}-01-01"
     end_date = f"{year}-12-31"
 
     try:
-        collection = ee.ImageCollection(collection_id)
+        # Use global constant for Collection ID
+        collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
         image = collection.filterDate(start_date, end_date).mosaic()
-        glance_layer = image.select(class_band)
+        
+        # Use global constant for Band Name
+        glance_layer = image.select(GLANCE_CLASS_BAND)
 
-        # 5. Add the Layer and Legend
+        # 4. Add Layer to Map
         m.addLayer(glance_layer, vis_params, f"GLANCE LC {year}")
         
+        # 5. Dynamic Legend construction
+        # Creates a dictionary 'Name': 'Color' for the legend
         legend_dict = {
-            'Water': '0000FF', 'Ice/Snow': 'AAAAFF', 'Developed': 'FF0000',
-            'Barren': '964B00', 'Trees': '006400', 'Shrub': 'FFBB22',
-            'Herbaceous': 'FFFF4C'
+            meta['name']: meta['color'] 
+            for meta in GLANCE_METADATA.values()
         }
-        m.add_legend(title="GLANCE Classes", legend_dict=legend_dict)
-
-        print(f"GLANCE map for year {year} generated successfully.")
+        
+        m.add_legend(title="GLANCE Land Cover", legend_dict=legend_dict)
+        
         return m
 
     except Exception as e:
-        print(f"Error loading data for year {year}: {e}")
-        return m
+        print(f"Error loading GLANCE data for {year}: {e}")
+        return None
+
+###############################################################################
+#                                                                             #
+#                  4. ANALYSIS FUNCTIONS (LOCAL RASTER)                       #
+#                                                                             #
+###############################################################################
+
+def process_and_plot_pixel_counts(
+    input_dir=DEFAULT_INPUT_DIR,
+    output_dir=DEFAULT_OUTPUT_DIR,
+    no_data_value=NODATA_VALUE,
+):
+    """
+    Processes raster images to count pixels per class, plots a stacked bar chart,
+    and exports the results to a CSV file.
+
+    Parameters
+    ----------
+    input_dir : str, optional
+        Directory path where the masked .tif files are located. 
+        Defaults to DEFAULT_INPUT_DIR.
+    output_dir : str, optional
+        Directory path where the output plot and CSV will be saved.
+        Defaults to DEFAULT_OUTPUT_DIR.
+    no_data_value : int, optional
+        Pixel value to be treated as NoData. Defaults to NODATA_VALUE.
+
+    Returns
+    -------
+    pd.DataFrame
+        The pivot table containing pixel counts per year and class.
+    """
+
+    # 1. File Discovery and Sorting
+    # Find all .tif files in the input directory
+    search_pattern = os.path.join(input_dir, "*.tif")
+    raw_paths = glob.glob(search_pattern)
+
+    # Sort files chronologically using the helper function
+    # Note: Ensure 'get_year_from_filename' is defined in utils.py
+    image_paths = sorted(raw_paths, key=get_year_from_filename)
+    years = [get_year_from_filename(p) for p in image_paths]
+
+    # Stop if no files are found
+    if not image_paths:
+        print(f"No .tif files found in {input_dir}")
+        return None
+
+    records: list[dict] = []
+
+    # 2. Iterate through each year and corresponding image path
+    for year, path in zip(
+        years,
+        image_paths,
+    ):
+        # 3. Read the raster data
+        with rasterio.open(
+            path,
+        ) as src:
+            data = src.read(
+                1,
+            )
+
+        # 4. Count unique pixel values
+        values, counts = np.unique(
+            data,
+            return_counts=True,
+        )
+
+        # 5. Process counts and map to class names
+        for value, count in zip(
+            values,
+            counts,
+        ):
+            value = int(value)
+
+            # Filter out NoData values
+            if value == no_data_value:
+                continue
+
+            # Skip classes not defined in the global metadata
+            if value not in GLANCE_METADATA:
+                continue
+
+            records.append(
+                {
+                    "Year": year,
+                    "ClassID": value,
+                    "ClassName": GLANCE_METADATA[value]["name"],
+                    "Pixels": int(count),
+                },
+            )
+
+    # 6. Create DataFrame and Pivot Table
+    df_pixels = pd.DataFrame(
+        records,
+    )
+
+    pivot_pixels = (
+        df_pixels.pivot_table(
+            index="Year",
+            columns="ClassName",
+            values="Pixels",
+            aggfunc="sum",
+        )
+        .fillna(
+            0,
+        )
+        .astype(
+            int,
+        )
+    )
+
+    years_array = pivot_pixels.index.values
+
+    # 7. Determine Y-axis scaling factor and label
+    max_val = pivot_pixels.to_numpy().max()
+
+    if max_val >= 1_000_000:
+        scale_factor = 1_000_000
+        y_label = "Area (million pixels)"
+    elif max_val >= 1_000:
+        scale_factor = 1_000
+        y_label = "Area (thousand pixels)"
+    elif max_val >= 100:
+        scale_factor = 100
+        y_label = "Area (hundred pixels)"
+    else:
+        scale_factor = 1
+        y_label = "Area (pixels)"
+
+    pivot_scaled = pivot_pixels / scale_factor
+
+    print(
+        "Pixel counts per time point and class:",
+    )
+    print(
+        pivot_pixels,
+    )
+
+    # 8. Prepare color map and sorting logic
+    class_ids_plot = sorted(GLANCE_METADATA.keys())
+
+    color_map = {
+        GLANCE_METADATA[class_id]["name"]: GLANCE_METADATA[class_id]["color"]
+        for class_id in class_ids_plot
+    }
+
+    # Calculate Net Change to determine stack order
+    first_year = years_array[0]
+    last_year = years_array[-1]
+
+    # Handle cases where a class might be missing in first or last year
+    try:
+        net_change_per_class = (
+            pivot_scaled.loc[last_year]
+            - pivot_scaled.loc[first_year]
+        )
+    except KeyError:
+        # Fallback if specific years are missing, use first/last available
+        net_change_per_class = (
+            pivot_scaled.iloc[-1]
+            - pivot_scaled.iloc[0]
+        )
+
+    # Map names back to IDs for tie-breaking
+    name_to_id_map = {
+        v["name"]: k
+        for k, v in GLANCE_METADATA.items()
+    }
+
+    df_sorting = net_change_per_class.to_frame(
+        name="net_change",
+    )
+    df_sorting["class_id"] = df_sorting.index.map(
+        name_to_id_map,
+    )
+
+    # Sort: Net Change (Desc) then Class ID (Desc)
+    classes_for_stack = list(
+        df_sorting.sort_values(
+            by=[
+                "net_change",
+                "class_id",
+            ],
+            ascending=[
+                False,
+                False,
+            ],
+        ).index,
+    )
+
+    # Legend order: Reversed stack order
+    classes_for_legend = list(
+        reversed(classes_for_stack),
+    )
+
+    # 9. Generate the Stacked Bar Chart
+    fig, ax = plt.subplots(
+        figsize=(
+            10,
+            6,
+        ),
+    )
+
+    x = np.arange(
+        len(years_array),
+    )
+    width = 0.9
+    base = np.zeros(
+        len(years_array),
+        dtype=float,
+    )
+    patches_by_class: dict[str, plt.Artist] = {}
+
+    for cls in classes_for_stack:
+        if cls not in pivot_scaled.columns:
+            continue
+
+        values_cls = pivot_scaled[cls].reindex(
+            years_array,
+            fill_value=0.0,
+        ).values
+
+        bars = ax.bar(
+            x,
+            values_cls,
+            bottom=base,
+            width=width,
+            label=cls,
+            color=color_map.get(cls, "gray"),
+        )
+        patches_by_class[cls] = bars[0]
+        base += values_cls
+
+    # 10. Configure Axes
+    ax.set_xticks(
+        x,
+    )
+    ax.set_xticklabels(
+        years_array,
+    )
+
+    # Adaptive rotation for X-axis labels
+    n_labels = len(years_array)
+    if n_labels <= 7:
+        rotation = 0
+        ha = "center"
+    elif n_labels <= 12:
+        rotation = 45
+        ha = "right"
+    else:
+        rotation = 90
+        ha = "center"
+
+    plt.setp(
+        ax.get_xticklabels(),
+        rotation=rotation,
+        ha=ha,
+    )
+
+    ax.tick_params(
+        axis="both",
+        labelsize=14,
+    )
+    ax.set_ylabel(
+        y_label,
+        fontsize=18,
+    )
+    ax.set_xlabel(
+        "Time points",
+        fontsize=18,
+    )
+    ax.set_title(
+        "Number of pixels per class",
+        fontsize=20,
+    )
+
+    # Y-axis limit and formatting
+    y_max_scaled = base.max() * 1.1 if base.max() > 0 else 1.0
+    ax.set_ylim(
+        0,
+        y_max_scaled,
+    )
+    ax.yaxis.set_major_locator(
+        ticker.MaxNLocator(
+            nbins=5,
+            integer=True,
+        ),
+    )
+    ax.yaxis.set_major_formatter(
+        ticker.FormatStrFormatter(
+            "%d",
+        ),
+    )
+
+    # 11. Add Legend
+    handles = [
+        patches_by_class[cls]
+        for cls in classes_for_legend
+        if cls in patches_by_class
+    ]
+    labels = [
+        cls
+        for cls in classes_for_legend
+        if cls in patches_by_class
+    ]
+
+    ax.legend(
+        handles,
+        labels,
+        bbox_to_anchor=(
+            1.05,
+            1.0,
+        ),
+        loc="upper left",
+        frameon=False,
+        fontsize=12,
+    )
+
+    plt.tight_layout()
+
+    # 12. Save Figure
+    out_fig = os.path.join(
+        output_dir,
+        "graph_pixel_per_class.png",
+    )
+    plt.savefig(
+        out_fig,
+        format="png",
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.show()
+
+    # 13. Save CSV
+    csv_output_path = os.path.join(
+        output_dir,
+        "pixels_per_class_per_year.csv",
+    )
+    pivot_pixels.to_csv(
+        csv_output_path,
+        index_label="Year",
+    )
+    print(
+        f"Files saved to: {output_dir}",
+    )
+
+    return pivot_pixels
