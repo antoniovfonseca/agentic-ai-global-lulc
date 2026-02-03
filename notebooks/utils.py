@@ -327,13 +327,6 @@ def process_and_plot_pixel_counts(
 
     pivot_scaled = pivot_pixels / scale_factor
 
-    print(
-        "Pixel counts per time point and class:",
-    )
-    print(
-        pivot_pixels,
-    )
-
     # 8. Prepare color map and sorting logic
     class_ids_plot = sorted(GLANCE_METADATA.keys())
 
