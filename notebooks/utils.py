@@ -536,3 +536,86 @@ def process_and_plot_pixel_counts(
     )
 
     return pivot_pixels
+
+###############################################################################
+#                                                                             #
+#                  5. TRANSITION MATRIX                                       #
+#                                                                             #
+###############################################################################
+import ee
+import pandas as pd
+import utils
+
+def calculate_global_transition_matrix(year_start=2001, year_end=2002, scale=1000):
+    """
+    Calculates a global transition matrix between two years using GEE.
+
+    This function performs the calculation entirely on the Earth Engine 
+    servers. It creates a transition image where the values represent 
+    pairs of classes (e.g., class 5 to 1 becomes 501).
+
+    Parameters
+    ----------
+    year_start : int, optional
+        Initial year for the transition analysis. Defaults to 2001.
+    year_end : int, optional
+        Final year for the transition analysis. Defaults to 2002.
+    scale : int, optional
+        The pixel scale in meters for the global reduction. 
+        Note: scale=30 is native but may time out with getInfo(). 
+        Defaults to 1000 for faster global estimation.
+
+    Returns
+    -------
+    pd.DataFrame
+        A pivot table representing the transition matrix with class names.
+    """
+    # 1. Load the GLANCE collection and select the LC band
+    collection = ee.ImageCollection(utils.GLANCE_COLLECTION_ID)
+    
+    # 2. Filter images and create mosaics
+    img_start = collection.filterDate(f"{year_start}-01-01", f"{year_start}-12-31") \
+                          .mosaic() \
+                          .select(utils.GLANCE_CLASS_BAND)
+                          
+    img_end = collection.filterDate(f"{year_end}-01-01", f"{year_end}-12-31") \
+                        .mosaic() \
+                        .select(utils.GLANCE_CLASS_BAND)
+
+    # 3. Compute transitions: (StartYear * 100) + EndYear
+    # Using 100 as multiplier to accommodate future class expansions
+    transition_image = img_start.multiply(100).add(img_end)
+
+    # 4. Perform global reduction
+    # Global geometry covering the entire Earth
+    global_geom = ee.Geometry.Rectangle([-180, -90, 180, 90], 'EPSG:4326', False)
+    
+    stats = transition_image.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram(),
+        geometry=global_geom,
+        scale=scale,
+        maxPixels=1e13
+    ).get(utils.GLANCE_CLASS_BAND).getInfo()
+
+    # 5. Format results using metadata from utils.py
+    records = []
+    class_names = {k: v['name'] for k, v in utils.GLANCE_METADATA.items()}
+
+    for code, count in stats.items():
+        code_int = int(float(code))
+        id_from = code_int // 100
+        id_to = code_int % 100
+        
+        # Ensure we only include valid classes from metadata
+        if id_from in class_names and id_to in class_names:
+            records.append({
+                "From": class_names[id_from],
+                "To": class_names[id_to],
+                "Pixels": int(count)
+            })
+
+    # 6. Create DataFrame and Pivot Matrix
+    df_results = pd.DataFrame(records)
+    matrix = df_results.pivot(index="From", columns="To", values="Pixels").fillna(0)
+    
+    return matrix
