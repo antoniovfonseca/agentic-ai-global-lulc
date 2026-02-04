@@ -818,3 +818,40 @@ def load_global_transition_matrices(
             all_matrices[label] = matrix
             
     return all_matrices
+
+def convert_matrices_to_area(
+    matrices_dict,
+    pixel_size=30
+):
+    """
+    Converts pixel counts in transition matrices to area in square kilometers.
+
+    Parameters
+    ----------
+    matrices_dict : dict of pd.DataFrame
+        A dictionary where values are transition matrices in pixel counts.
+    pixel_size : int, optional
+        The edge length of a single pixel in meters. Defaults to 30.
+
+    Returns
+    -------
+    dict of pd.DataFrame
+        A dictionary of transition matrices with values in km^2.
+    """
+    # 1. Calculate the conversion factor from pixels to km^2
+    # Area of one pixel in m^2 = pixel_size * pixel_size
+    # Conversion to km^2 = m^2 / 1,000,000
+    conversion_factor = (pixel_size ** 2) / 1000000
+    
+    area_matrices = {}
+
+    # 2. Iterate through the dictionary of matrices
+    for label, matrix in matrices_dict.items():
+        # 3. Multiply the entire DataFrame by the conversion factor
+        # Pandas handles the element-wise multiplication automatically
+        area_matrix = matrix * conversion_factor
+        
+        # 4. Round the results to two decimal places for readability
+        area_matrices[label] = area_matrix.round(2)
+        
+    return area_matrices
