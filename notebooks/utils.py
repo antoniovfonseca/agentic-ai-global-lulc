@@ -778,9 +778,17 @@ def load_global_transition_matrices(
         if 'LC' not in df_raw.columns:
             continue
             
+        # Clean the string and parse the {key=value} format
         hist_str = df_raw['LC'].iloc[0]
-        hist_data = json.loads(hist_str)
-        
+        # Remove braces and split by comma-space
+        clean_str = hist_str.strip('{}')
+        pairs = clean_str.split(', ')
+        hist_data = {}
+        for pair in pairs:
+            if '=' in pair:
+                k, v = pair.split('=')
+                hist_data[k] = float(v) # Fixes the parsing for GEE CSV format
+
         records = []
         
         # 6. Decode transition codes into 'From' and 'To' classes
