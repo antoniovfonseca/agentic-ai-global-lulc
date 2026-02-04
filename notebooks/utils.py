@@ -855,3 +855,51 @@ def convert_matrices_to_area(
         area_matrices[label] = area_matrix.round(2)
         
     return area_matrices
+
+def save_area_matrices_to_csv(
+    area_matrices,
+    output_dir
+):
+    """
+    Saves a dictionary of area matrices to individual CSV files.
+
+    Parameters
+    ----------
+    area_matrices : dict of pd.DataFrame
+        Dictionary containing the transition matrices in km^2.
+    output_dir : str
+        The directory path where the CSV files will be saved.
+
+    Returns
+    -------
+    list of str
+        A list of file paths to the saved CSV files.
+    """
+    # 1. Check if the output directory exists and create it if necessary
+    if not os.path.exists(output_dir):
+        os.makedirs(
+            output_dir, 
+            exist_ok=True
+        )
+    
+    saved_files = []
+
+    # 2. Iterate through the dictionary to process each transition matrix
+    for label, matrix in area_matrices.items():
+        # 3. Construct the specific filename for the km2 results
+        filename = f"transition_matrix_{label}_km2.csv"
+        filepath = os.path.join(
+            output_dir, 
+            filename
+        )
+        
+        # 4. Save the DataFrame to CSV including the class names in the index
+        matrix.to_csv(
+            filepath,
+            index=True
+        )
+        
+        saved_files.append(filepath)
+        print(f"Successfully saved: {filename}")
+        
+    return saved_files
