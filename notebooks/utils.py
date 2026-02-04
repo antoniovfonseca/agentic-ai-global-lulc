@@ -887,7 +887,7 @@ def save_area_matrices_to_csv(
     # 2. Iterate through the dictionary to process each transition matrix
     for label, matrix in area_matrices.items():
         # 3. Construct the specific filename for the km2 results
-        filename = f"transition_matrix_{label}_km2.csv"
+        filename = f"transition_matrix_km2_{label}.csv"
         filepath = os.path.join(
             output_dir, 
             filename
