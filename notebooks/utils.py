@@ -2,6 +2,7 @@ import os
 import re
 import glob
 import ee
+import json
 import geemap
 import numpy as np
 import pandas as pd
@@ -728,3 +729,84 @@ def export_global_transition_tasks(
         print(f"Task started for {label} (Scale: {scale}m)")
 
     return triggered_tasks
+
+###############################################################################
+#                                                                             #
+#                  6. Convert CSV to Transition Matrix                        #
+#                                                                             #
+###############################################################################
+
+def load_global_transition_matrices(
+    drive_path
+):
+    """
+    Loads exported GEE CSVs from Drive and converts them to transition matrices.
+
+    Parameters
+    ----------
+    drive_path : str
+        The full path to the Google Drive folder containing the CSV files.
+
+    Returns
+    -------
+    dict of pd.DataFrame
+        A dictionary where keys are 'YYYY_YYYY' and values are pivot matrices.
+    """
+
+    # 1. Identify all CSV files in the specified directory
+    search_pattern = os.path.join(drive_path, "*.csv")
+    file_list = glob.glob(search_pattern)
+    
+    # 2. Create a mapping of class IDs to names from metadata
+    class_names = {
+        k: v['name'] 
+        for k, v in GLANCE_METADATA.items()
+    }
+    
+    all_matrices = {}
+
+    # 3. Iterate through each file to reconstruct the matrix
+    for filepath in file_list:
+        df_raw = pd.read_csv(filepath)
+        
+        # 4. Extract the transition label from the filename
+        filename = os.path.basename(filepath)
+        label = filename.replace(".csv", "").replace("transition_", "")
+        
+        # 5. Parse the histogram string from the 'LC' column
+        # GEE exports the dictionary as a string in the first row
+        if 'LC' not in df_raw.columns:
+            continue
+            
+        hist_str = df_raw['LC'].iloc[0]
+        hist_data = json.loads(hist_str)
+        
+        records = []
+        
+        # 6. Decode transition codes into 'From' and 'To' classes
+        for code, count in hist_data.items():
+            code_int = int(float(code))
+            id_from = code_int // 100
+            id_to = code_int % 100
+
+            # 7. Filter records using valid metadata classes
+            if id_from in class_names and id_to in class_names:
+                records.append({
+                    "From": class_names[id_from],
+                    "To": class_names[id_to],
+                    "Pixels": int(count)
+                })
+
+        # 8. Pivot the records into a formal transition matrix
+        if records:
+            df_temp = pd.DataFrame(records)
+            matrix = df_temp.pivot(
+                index="From", 
+                columns="To", 
+                values="Pixels"
+            ).fillna(0)
+
+            # 9. Store the resulting DataFrame in the output dictionary
+            all_matrices[label] = matrix
+            
+    return all_matrices
