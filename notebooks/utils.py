@@ -971,3 +971,113 @@ def compute_sum_matrix(
         print(f"SUM matrix successfully saved to: {output_path}")
 
     return df_sum
+
+###############################################################################
+#                                                                             #
+#                  8. Compute Exchange and Shift                              #
+#                                                                             #
+###############################################################################
+def compute_and_save_components(
+    df_sum: pd.DataFrame,
+    df_ext: pd.DataFrame,
+    output_dir: str,
+    period_label: str = "2001-2019",
+) -> None:
+    """
+    Decompose Sum and Extent matrices into 4 change components and save them.
+
+    Parameters
+    ----------
+    df_sum : pd.DataFrame
+        Aggregated transition matrix (Sum of all annual intervals).
+    df_ext : pd.DataFrame
+        Direct transition matrix (Extent: start year vs end year).
+    output_dir : str
+        Directory path to save the resulting CSV files.
+    period_label : str, optional
+        Year range label for filename (e.g., "2001-2019"), by default "2001-2019".
+
+    Returns
+    -------
+    None
+    """
+    def _get_exchange_and_shift(
+        matrix: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Internal helper to decompose a matrix into Exchange and Shift."""
+        # Ensure diagonal (persistence) is zero for component logic
+        m_calc = matrix.copy()
+        np.fill_diagonal(
+            m_calc,
+            0.0,
+        )
+        exchange = np.minimum(
+            m_calc,
+            m_calc.T,
+        )
+        shift = m_calc - exchange
+        return exchange, shift
+
+    # 1. Ensure matrices are aligned and have the same shape/labels
+    all_labels = sorted(
+        list(
+            set(df_sum.index).union(df_sum.columns),
+        ),
+        key=lambda x: int(x),
+    )
+    
+    df_sum = df_sum.reindex(
+        index=all_labels,
+        columns=all_labels,
+    ).fillna(0.0)
+    
+    df_ext = df_ext.reindex(
+        index=all_labels,
+        columns=all_labels,
+    ).fillna(0.0)
+
+    # 2. Calculate Allocation Components (from Extent)
+    alloc_exc, alloc_shift = _get_exchange_and_shift(
+        df_ext.values,
+    )
+
+    # 3. Calculate Alternation Components (from Sum - Extent)
+    # This represents the transitions that occurred but were not 'net' changes
+    alternation_raw = np.maximum(
+        df_sum.values - df_ext.values,
+        0.0,
+    )
+    alt_exc, alt_shift = _get_exchange_and_shift(
+        alternation_raw,
+    )
+
+    # 4. Map and Save
+    components = {
+        "allocation_exchange": alloc_exc,
+        "allocation_shift": alloc_shift,
+        "alternation_exchange": alt_exc,
+        "alternation_shift": alt_shift,
+        "sum": df_sum.values,
+        "extent": df_ext.values,
+    }
+
+    for name, data in components.items():
+        df_out = pd.DataFrame(
+            data,
+            index=all_labels,
+            columns=all_labels,
+        )
+        
+        file_name = f"transition_matrix_{name}_{period_label}.csv"
+        save_path = os.path.join(
+            output_dir,
+            file_name,
+        )
+        
+        df_out.to_csv(
+            save_path,
+        )
+        
+        print(
+            f"Component matrix saved to: {save_path}",
+        )
