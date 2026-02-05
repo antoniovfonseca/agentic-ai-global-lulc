@@ -1230,6 +1230,50 @@ def _unit_formatter(
 
     return mticker.FuncFormatter(_fmt)
 
+def label_id_to_name(
+    labels: Iterable[str],
+    class_labels_dict: dict,
+) -> list[str]:
+    """
+    Map class ID strings to human-readable names using class_labels_dict.
+
+    Parameters
+    ----------
+    labels : Iterable[str]
+        Class IDs as strings (e.g. ["1", "2", "3"]).
+    class_labels_dict : dict
+        Dictionary containing metadata for each class ID.
+
+    Returns
+    -------
+    list[str]
+        List of class names mapped from IDs.
+    """
+    id_to_name = {
+        int(k): v.get(
+            "rename",
+            v.get(
+                "name",
+                str(k),
+            ),
+        )
+        for k, v in class_labels_dict.items()
+    }
+
+    names: list[str] = []
+    for lab in labels:
+        try:
+            cid = int(str(lab))
+            names.append(
+                id_to_name.get(
+                    cid,
+                    str(lab),
+                ),
+            )
+        except Exception:
+            names.append(str(lab))
+
+    return names
 
 def plot_heatmap(
     df: pd.DataFrame,
@@ -1344,7 +1388,10 @@ def plot_heatmap(
     ax.imshow(m_diag, aspect="equal", cmap=mcolors.ListedColormap(["black"]))
 
     # Labels and Titles
-    tick_names = label_id_to_name(labels)
+    tick_names = label_id_to_name(
+        labels=labels,
+        class_labels_dict=GLANCE_METADATA,
+    )
     ax.set_xticks(range(len(labels)))
     ax.set_yticks(range(len(labels)))
     ax.set_xticklabels(tick_names, rotation=rotate_xticks_deg, fontsize=tick_fontsize_x)
