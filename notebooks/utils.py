@@ -1154,3 +1154,145 @@ def reorder_matrices_by_net_change(
         _apply_order(df_alt_exc),
         _apply_order(df_alt_shift),
     )
+###############################################################################
+#                                                                             #
+#                  10. Plot heat maps function                                #
+#                                                                             #
+###############################################################################
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def plot_heatmap(
+    df: pd.DataFrame,
+    title: str,
+    save_path: str,
+    tick_fontsize_x: int = 12,
+    tick_fontsize_y: int = 12,
+    axis_label_fontsize: int = 14,
+    title_fontsize: int = 16,
+    ann_fontsize: int = 10,
+    cbar_label: str = "Area (km²)",
+    cbar_fraction: float = 0.046,
+    cbar_pad: float = 0.04,
+) -> None:
+    """
+    Generate a high-fidelity heatmap matching the reference notebook structure.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Square matrix containing transition data or change components.
+    title : str
+        The descriptive title to be displayed on the plot.
+    save_path : str
+        Full system path where the PNG file will be exported.
+    tick_fontsize_x : int, optional
+        Font size for the X-axis labels, by default 12.
+    tick_fontsize_y : int, optional
+        Font size for the Y-axis labels, by default 12.
+    axis_label_fontsize : int, optional
+        Font size for the axis titles, by default 14.
+    title_fontsize : int, optional
+        Font size for the main plot title, by default 16.
+    ann_fontsize : int, optional
+        Font size for the numerical annotations inside cells, by default 10.
+    cbar_label : str, optional
+        Label for the colorbar scale, by default "Area (km²)".
+    cbar_fraction : float, optional
+        Fraction of original axes to use for colorbar, by default 0.046.
+    cbar_pad : float, optional
+        Padding between the heatmap and the colorbar, by default 0.04.
+
+    Returns
+    -------
+    None
+    """
+    # 1. Formatting Setup
+    # Masking diagonal to highlight transitions only (Persistence is excluded)
+    plot_data = df.copy()
+    mask = np.eye(
+        len(plot_data), 
+        dtype=bool,
+    )
+
+    # 2. Figure and Axes Initialization
+    sns.set_theme(style="white")
+    fig, ax = plt.subplots(
+        figsize=(14, 11),
+    )
+
+    # 3. Heatmap Core Logic
+    # Using 'YlOrRd' as the standardized color palette for transitions
+    heatmap = sns.heatmap(
+        plot_data,
+        mask=mask,
+        annot=True,
+        fmt=".1f",
+        cmap="YlOrRd",
+        linewidths=0.8,
+        linecolor="white",
+        square=True,
+        cbar_kws={
+            "label": cbar_label,
+            "fraction": cbar_fraction,
+            "pad": cbar_pad,
+            "shrink": 0.8,
+        },
+        annot_kws={
+            "size": ann_fontsize,
+            "weight": "normal",
+        },
+        ax=ax,
+    )
+
+    # 4. Axis and Label Styling
+    ax.set_title(
+        title, 
+        fontsize=title_fontsize, 
+        fontweight="bold", 
+        pad=25,
+    )
+    ax.set_xlabel(
+        "To (End Year)", 
+        fontsize=axis_label_fontsize, 
+        labelpad=15,
+    )
+    ax.set_ylabel(
+        "From (Start Year)", 
+        fontsize=axis_label_fontsize, 
+        labelpad=15,
+    )
+
+    # Label rotation for categorical clarity (e.g., 'Herbaceous')
+    plt.xticks(
+        rotation=45,
+        ha="right",
+        fontsize=tick_fontsize_x,
+    )
+    plt.yticks(
+        rotation=0,
+        fontsize=tick_fontsize_y,
+    )
+
+    # 5. Output Management
+    plt.tight_layout()
+    
+    # Ensure directory exists
+    output_dir = os.path.dirname(save_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    plt.savefig(
+        save_path,
+        dpi=300,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+    
+    plt.show()
+    plt.close(fig)
+
+    print(f"Successfully generated and saved: {os.path.basename(save_path)}")
