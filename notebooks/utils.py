@@ -1092,3 +1092,65 @@ def compute_and_save_components(
         print(
             f"Component matrix saved to: {save_path}",
         )
+
+###############################################################################
+#                                                                             #
+#                  9. Reorder Matrices by net change                          #
+#                                                                             #
+###############################################################################
+def reorder_matrices_by_net_change(
+    df_sum: pd.DataFrame,
+    df_ext: pd.DataFrame,
+    df_ext_exc: pd.DataFrame,
+    df_ext_shift: pd.DataFrame,
+    df_alt_exc: pd.DataFrame,
+    df_alt_shift: pd.DataFrame,
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+]:
+    """
+    Reorder matrices from largest losers to largest gainers using net change.
+
+    Parameters
+    ----------
+    df_sum : pd.DataFrame
+        The aggregated SUM matrix used to calculate the sorting order.
+    df_ext, df_ext_exc, df_ext_shift, df_alt_exc, df_alt_shift : pd.DataFrame
+        The other component matrices to be reordered.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, ...]
+        All input dataframes reindexed with the same optimized order.
+    """
+    # 1. Calculate Net Change (Gains - Losses)
+    # Diagonal is ignored to focus only on transitions
+    m_values = df_sum.values.copy()
+    np.fill_diagonal(m_values, 0.0)
+    
+    gains = m_values.sum(axis=0)
+    losses = m_values.sum(axis=1)
+    net_change = gains - losses
+    
+    # 2. Define the sorting order (ascending: losers first)
+    net_series = pd.Series(net_change, index=df_sum.index)
+    order_labels = net_series.sort_values(ascending=True).index.tolist()
+
+    # 3. Helper to apply the same order to any dataframe
+    def _apply_order(df: pd.DataFrame) -> pd.DataFrame:
+        return df.reindex(index=order_labels, columns=order_labels).fillna(0.0)
+
+    # 4. Return all matrices reordered
+    return (
+        _apply_order(df_sum),
+        _apply_order(df_ext),
+        _apply_order(df_ext_exc),
+        _apply_order(df_ext_shift),
+        _apply_order(df_alt_exc),
+        _apply_order(df_alt_shift),
+    )
