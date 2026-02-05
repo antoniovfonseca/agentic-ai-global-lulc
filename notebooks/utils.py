@@ -1160,139 +1160,239 @@ def reorder_matrices_by_net_change(
 #                                                                             #
 ###############################################################################
 import os
+from typing import Iterable, List, Optional, Tuple
+
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+
+
+def _unit_label(
+    suffix: str,
+    base_label: str = "number of pixels",
+) -> str:
+    """
+    Build a descriptive label for the colorbar based on a unit suffix.
+
+    Parameters
+    ----------
+    suffix : str
+        The suffix for the unit (e.g., 'k', 'M').
+    base_label : str, optional
+        The base label text, by default "number of pixels".
+
+    Returns
+    -------
+    str
+        The formatted unit label.
+    """
+    mapping = {
+        "": base_label,
+        "k": "thousand pixels",
+        "M": "million pixels",
+        "B": "billion pixels",
+        "T": "trillions pixels",
+    }
+    return mapping.get(
+        suffix,
+        f"{base_label} ({suffix})",
+    )
+
+
+def _unit_formatter(
+    factor: float,
+    suffix: str,
+    decimals: int = 1,
+) -> mticker.FuncFormatter:
+    """
+    Build a tick formatter that scales values and appends a suffix.
+
+    Parameters
+    ----------
+    factor : float
+        The factor to divide the values by.
+    suffix : str
+        The string suffix to append.
+    decimals : int, optional
+        Number of decimal places, by default 1.
+
+    Returns
+    -------
+    mticker.FuncFormatter
+        A formatter function for the plot ticks.
+    """
+    fmt = f"{{:.{decimals}f}}{suffix}"
+
+    def _fmt(x: float, pos: int) -> str:
+        return fmt.format(x / factor)
+
+    return mticker.FuncFormatter(_fmt)
+
 
 def plot_heatmap(
     df: pd.DataFrame,
     title: str,
-    save_path: str,
-    tick_fontsize_x: int = 12,
-    tick_fontsize_y: int = 12,
-    axis_label_fontsize: int = 14,
-    title_fontsize: int = 16,
-    ann_fontsize: int = 10,
-    cbar_label: str = "Area (km²)",
-    cbar_fraction: float = 0.046,
-    cbar_pad: float = 0.04,
+    save_path: Optional[str] = None,
+    figsize: Optional[Tuple[float, float]] = None,
+    cmap: str = "YlOrRd",
+    vmin: float = 0.0,
+    vmax: Optional[float] = None,
+    rotate_xticks_deg: int = 90,
+    cbar_label: str = "Number of pixels",
+    annotate: bool = True,
+    cell_size_inch: float = 0.8,
+    ann_fontsize: int = 8,
+    cbar_fraction: float = 0.025,
+    cbar_pad: float = 0.02,
+    tick_fontsize_x: Optional[int] = None,
+    tick_fontsize_y: Optional[int] = None,
+    axis_label_fontsize: Optional[int] = None,
+    title_fontsize: Optional[int] = None,
 ) -> None:
     """
-    Generate a high-fidelity heatmap matching the reference notebook structure.
+    Plot a square matrix as a heatmap with adaptive integer colorbar.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Square matrix containing transition data or change components.
+        Square dataframe to plot.
     title : str
-        The descriptive title to be displayed on the plot.
-    save_path : str
-        Full system path where the PNG file will be exported.
-    tick_fontsize_x : int, optional
-        Font size for the X-axis labels, by default 12.
-    tick_fontsize_y : int, optional
-        Font size for the Y-axis labels, by default 12.
-    axis_label_fontsize : int, optional
-        Font size for the axis titles, by default 14.
-    title_fontsize : int, optional
-        Font size for the main plot title, by default 16.
-    ann_fontsize : int, optional
-        Font size for the numerical annotations inside cells, by default 10.
+        Plot title.
+    save_path : str, optional
+        Path to save the PNG image.
+    figsize : tuple, optional
+        Figure size in inches.
+    cmap : str, optional
+        Colormap name, by default "YlOrRd".
+    vmin : float, optional
+        Minimum value for scaling, by default 0.0.
+    vmax : float, optional
+        Maximum value for scaling.
+    rotate_xticks_deg : int, optional
+        X-tick rotation, by default 90.
     cbar_label : str, optional
-        Label for the colorbar scale, by default "Area (km²)".
+        Label for the colorbar.
+    annotate : bool, optional
+        Whether to annotate cells.
+    cell_size_inch : float, optional
+        Size of each cell in inches.
+    ann_fontsize : int, optional
+        Annotation font size.
     cbar_fraction : float, optional
-        Fraction of original axes to use for colorbar, by default 0.046.
+        Colorbar fraction.
     cbar_pad : float, optional
-        Padding between the heatmap and the colorbar, by default 0.04.
-
-    Returns
-    -------
-    None
+        Colorbar padding.
+    tick_fontsize_x : int, optional
+        X-tick font size. Required.
+    tick_fontsize_y : int, optional
+        Y-tick font size. Required.
+    axis_label_fontsize : int, optional
+        Axis label font size.
+    title_fontsize : int, optional
+        Title font size.
     """
-    # 1. Formatting Setup
-    # Masking diagonal to highlight transitions only (Persistence is excluded)
-    plot_data = df.copy()
-    mask = np.eye(
-        len(plot_data), 
-        dtype=bool,
+    if tick_fontsize_x is None or tick_fontsize_y is None:
+        raise ValueError("Set `tick_fontsize_x` and `tick_fontsize_y` explicitly.")
+
+    axis_label_fontsize = axis_label_fontsize or 12
+    title_fontsize = title_fontsize or 14
+
+    labels = list(df.index)
+    matrix_values = df.values.astype(float)
+
+    # Scale Logic
+    matrix_scale = matrix_values.copy()
+    np.fill_diagonal(matrix_scale, 0.0)
+    finite_vals = matrix_scale[np.isfinite(matrix_scale)]
+
+    if finite_vals.size == 0:
+        has_negative, vmin_eff, vmax_eff = False, 0.0, 1.0
+    else:
+        has_negative = float(np.nanmin(finite_vals)) < 0.0
+        vmin_eff = float(np.nanmin(finite_vals)) if has_negative else vmin
+        vmax_eff = float(np.nanmax(finite_vals)) if vmax is None else float(vmax)
+        if vmin_eff == vmax_eff:
+            vmax_eff += 1.0
+
+    # Layout Initialization
+    nrows, ncols = df.shape
+    figsize = figsize or (cell_size_inch * ncols, cell_size_inch * nrows)
+    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
+
+    cmap_neg = mcolors.LinearSegmentedColormap.from_list(
+        "CustomBlues", ["#08306b", "#b3e0ff"]
     )
 
-    # 2. Figure and Axes Initialization
-    sns.set_theme(style="white")
-    fig, ax = plt.subplots(
-        figsize=(14, 11),
-    )
+    # Plotting Layers
+    if has_negative:
+        m_pos = np.ma.masked_less_equal(matrix_values, 0.0)
+        ax.imshow(m_pos, aspect="equal", cmap=plt.cm.YlOrRd, 
+                  norm=mcolors.Normalize(vmin=0.0, vmax=vmax_eff))
+        m_neg = np.ma.masked_where(matrix_values >= 0.0, matrix_values)
+        ax.imshow(m_neg, aspect="equal", cmap=cmap_neg, 
+                  norm=mcolors.Normalize(vmin=vmin_eff, vmax=0.0))
+    else:
+        m_pos = np.ma.masked_equal(matrix_values, 0.0)
+        ax.imshow(m_pos, aspect="equal", cmap=plt.cm.YlOrRd, 
+                  norm=mcolors.Normalize(vmin=vmin_eff, vmax=vmax_eff))
 
-    # 3. Heatmap Core Logic
-    # Using 'YlOrRd' as the standardized color palette for transitions
-    heatmap = sns.heatmap(
-        plot_data,
-        mask=mask,
-        annot=True,
-        fmt=".1f",
-        cmap="YlOrRd",
-        linewidths=0.8,
-        linecolor="white",
-        square=True,
-        cbar_kws={
-            "label": cbar_label,
-            "fraction": cbar_fraction,
-            "pad": cbar_pad,
-            "shrink": 0.8,
-        },
-        annot_kws={
-            "size": ann_fontsize,
-            "weight": "normal",
-        },
-        ax=ax,
-    )
+    # Black Diagonal Overlay
+    diag_mask = np.eye(nrows, dtype=bool)
+    m_diag = np.ma.masked_where(~diag_mask, np.ones_like(matrix_values))
+    ax.imshow(m_diag, aspect="equal", cmap=mcolors.ListedColormap(["black"]))
 
-    # 4. Axis and Label Styling
-    ax.set_title(
-        title, 
-        fontsize=title_fontsize, 
-        fontweight="bold", 
-        pad=25,
-    )
-    ax.set_xlabel(
-        "To (End Year)", 
-        fontsize=axis_label_fontsize, 
-        labelpad=15,
-    )
-    ax.set_ylabel(
-        "From (Start Year)", 
-        fontsize=axis_label_fontsize, 
-        labelpad=15,
-    )
+    # Labels and Titles
+    tick_names = label_id_to_name(labels)
+    ax.set_xticks(range(len(labels)))
+    ax.set_yticks(range(len(labels)))
+    ax.set_xticklabels(tick_names, rotation=rotate_xticks_deg, fontsize=tick_fontsize_x)
+    ax.set_yticklabels(tick_names, fontsize=tick_fontsize_y)
+    ax.set_xlabel("To class", fontsize=axis_label_fontsize)
+    ax.set_ylabel("From class", fontsize=axis_label_fontsize)
+    ax.set_title(title, fontsize=title_fontsize)
 
-    # Label rotation for categorical clarity (e.g., 'Herbaceous')
-    plt.xticks(
-        rotation=45,
-        ha="right",
-        fontsize=tick_fontsize_x,
-    )
-    plt.yticks(
-        rotation=0,
-        fontsize=tick_fontsize_y,
-    )
+    # Legend Construction
+    n_bar = 256
+    vals = np.linspace(vmin_eff, vmax_eff, n_bar)
+    colors_bar = [
+        cmap_neg((v - vmin_eff) / (0.0 - vmin_eff)) if has_negative and v < 0 
+        else (1.0, 1.0, 1.0, 1.0) if v == 0 
+        else plt.cm.YlOrRd(v / vmax_eff) 
+        for v in vals
+    ]
 
-    # 5. Output Management
-    plt.tight_layout()
+    sm = plt.cm.ScalarMappable(
+        cmap=mcolors.ListedColormap(colors_bar),
+        norm=mcolors.Normalize(vmin=vmin_eff, vmax=vmax_eff)
+    )
+    sm.set_array([])
     
-    # Ensure directory exists
-    output_dir = os.path.dirname(save_path)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    cbar = fig.colorbar(sm, ax=ax, fraction=cbar_fraction, pad=cbar_pad)
 
-    plt.savefig(
-        save_path,
-        dpi=300,
-        bbox_inches="tight",
-        facecolor="white",
+    # --- CUSTOM COLORBAR SCALE LOGIC ---
+    max_abs = float(np.nanmax(np.abs(finite_vals))) if finite_vals.size > 0 else 0.0
+    if max_abs >= 1e6:
+        factor, suffix = 1e6, "M"
+    elif max_abs >= 1e3:
+        factor, suffix = 1e3, "k"
+    else:
+        factor, suffix = 1.0, ""
+
+    cbar.locator = mticker.MaxNLocator(nbins=5, integer=True, steps=[1, 2, 5, 10])
+    cbar.formatter = _unit_formatter(factor=factor, suffix="", decimals=0)
+    cbar.set_label(
+        _unit_label(suffix, base_label=cbar_label),
+        rotation=270,
+        labelpad=15,
+        fontsize=12
     )
-    
+    cbar.update_ticks()
+
+    if annotate:
+        annotate_heatmap(ax=ax, M=matrix_values, fontsize=ann_fontsize)
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
-    plt.close(fig)
-
-    print(f"Successfully generated and saved: {os.path.basename(save_path)}")
