@@ -1168,6 +1168,64 @@ import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 
+def annotate_heatmap(
+    ax: plt.Axes,
+    M: np.ndarray,
+    fontsize: int = 8,
+) -> None:
+    """
+    Annotate a heatmap with integer cell values and adaptive text color.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        The axes object where the heatmap is plotted.
+    M : np.ndarray
+        The matrix containing the values to display.
+    fontsize : int, optional
+        The font size of the annotations, by default 8.
+    """
+    if M.size == 0:
+        return
+
+    M_off = M.copy()
+    np.fill_diagonal(M_off, np.nan)
+    data_off = M_off[np.isfinite(M_off)]
+
+    has_pos = np.any(data_off > 0)
+    has_neg = np.any(data_off < 0)
+
+    max_pos = float(np.nanmax(data_off[data_off > 0])) if has_pos else 0.0
+    min_neg = float(np.nanmin(data_off[data_off < 0])) if has_neg else 0.0
+
+    thresh_pos = 0.5 * max_pos if has_pos else np.inf
+    thresh_neg = 0.5 * min_neg if has_neg else -np.inf
+
+    for i in range(M.shape[0]):
+        for j in range(M.shape[1]):
+            # Skip diagonal annotation as per reference
+            if i == j:
+                continue
+
+            v = float(M[i, j])
+            txt = f"{int(round(v))}"
+
+            # Adaptive color logic
+            if (has_pos and v >= thresh_pos) or (has_neg and v <= thresh_neg):
+                color = "white"
+            else:
+                color = "black"
+
+            ax.text(
+                j,
+                i,
+                txt,
+                ha="center",
+                va="center",
+                fontsize=fontsize,
+                color=color,
+                clip_on=True,
+            )
 
 def _unit_label(
     suffix: str,
