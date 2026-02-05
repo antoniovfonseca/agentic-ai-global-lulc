@@ -984,18 +984,23 @@ def compute_and_save_components(
     period_label: str = "2001-2019",
 ) -> None:
     """
-    Decompose Sum and Extent matrices into 4 change components and save them.
+    Decompose Sum and Extent matrices into change components.
+
+    Logic:
+    1. Allocation: Derived from Extent matrix (Aggregate level).
+    2. Alternation: Derived from (Sum - Extent) (Trajectory level).
+    Note: Shift components can be negative based on algebraic remainder.
 
     Parameters
     ----------
     df_sum : pd.DataFrame
-        Aggregated transition matrix (Sum of all annual intervals).
+        Aggregated transition matrix (Sum of annual intervals).
     df_ext : pd.DataFrame
-        Direct transition matrix (Extent: start year vs end year).
+        Direct transition matrix (Start year vs End year).
     output_dir : str
         Directory path to save the resulting CSV files.
     period_label : str, optional
-        Year range label for filename (e.g., "2001-2019"), by default "2001-2019".
+        Year range label for filename, by default "2001-2019".
 
     Returns
     -------
@@ -1004,25 +1009,22 @@ def compute_and_save_components(
     def _get_exchange_and_shift(
         matrix: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Internal helper to decompose a matrix into Exchange and Shift."""
+        """Decompose matrix into positive Exchange and signed Shift."""
         m_calc = matrix.copy()
-        np.fill_diagonal(
-            m_calc,
-            0.0,
-        )
-        exchange = np.minimum(
-            m_calc,
-            m_calc.T,
-        )
+        np.fill_diagonal(m_calc, 0.0)
+        
+        # Exchange captures symmetrical swaps (always positive magnitude)
+        exchange = np.maximum(0, np.minimum(m_calc, m_calc.T))
+        
+        # Shift is the signed algebraic remainder
         shift = m_calc - exchange
+        
         return exchange, shift
 
-    # 1. Flexible sorting to handle names like 'Developed'
-    # It tries to match the name to the metadata order, otherwise uses alphabetical
+    # 1. Align and Sort Matrices based on GLANCE_METADATA order
     name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
     
-    def _custom_sort_key(label):
-        # Try to get ID from metadata name, then try to parse as int, else string
+    def _sort_key(label):
         if label in name_to_id:
             return (0, name_to_id[label])
         try:
@@ -1031,67 +1033,43 @@ def compute_and_save_components(
             return (1, str(label))
 
     all_labels = sorted(
-        list(
-            set(df_sum.index).union(df_sum.columns),
-        ),
-        key=_custom_sort_key,
+        list(set(df_sum.index).union(df_sum.columns)),
+        key=_sort_key
     )
     
-    # 2. Reindex and align matrices
-    df_sum = df_sum.reindex(
-        index=all_labels,
-        columns=all_labels,
-    ).fillna(0.0)
-    
-    df_ext = df_ext.reindex(
-        index=all_labels,
-        columns=all_labels,
-    ).fillna(0.0)
+    df_s = df_sum.reindex(index=all_labels, columns=all_labels).fillna(0.0)
+    df_e = df_ext.reindex(index=all_labels, columns=all_labels).fillna(0.0)
 
-    # 3. Calculate Allocation Components (from Extent)
-    alloc_exc, alloc_shift = _get_exchange_and_shift(
-        df_ext.values,
-    )
+    # 2. Calculate Components
+    # Allocation: Based on direct Extent matrix
+    alloc_exc, alloc_shift = _get_exchange_and_shift(df_e.values)
 
-    # 4. Calculate Alternation Components (from Sum - Extent)
-    alternation_raw = np.maximum(
-        df_sum.values - df_ext.values,
-        0.0,
-    )
-    alt_exc, alt_shift = _get_exchange_and_shift(
-        alternation_raw,
-    )
+    # Alternation: Sum - Extent (Removes np.maximum to allow negative shifts)
+    alternation_raw = df_s.values - df_e.values
+    alt_exc, alt_shift = _get_exchange_and_shift(alternation_raw)
 
-    # 5. Map and Save all 6 required files
+    # 3. Export to CSV
     components = {
+        "sum": df_s.values,
+        "extent": df_e.values,
         "allocation_exchange": alloc_exc,
         "allocation_shift": alloc_shift,
         "alternation_exchange": alt_exc,
         "alternation_shift": alt_shift,
-        "sum": df_sum.values,
-        "extent": df_ext.values,
     }
 
     for name, data in components.items():
         df_out = pd.DataFrame(
             data,
             index=all_labels,
-            columns=all_labels,
+            columns=all_labels
         )
         
-        file_name = f"transition_matrix_{name}_{period_label}.csv"
-        save_path = os.path.join(
-            output_dir,
-            file_name,
-        )
+        fname = f"transition_matrix_{name}_{period_label}.csv"
+        path = os.path.join(output_dir, fname)
+        df_out.to_csv(path)
         
-        df_out.to_csv(
-            save_path,
-        )
-        
-        print(
-            f"Component matrix saved to: {save_path}",
-        )
+        print(f"Component saved: {fname}")
 
 ###############################################################################
 #                                                                             #
