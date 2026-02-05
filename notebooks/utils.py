@@ -903,3 +903,71 @@ def save_area_matrices_to_csv(
         print(f"Successfully saved: {filename}")
         
     return saved_files
+
+###############################################################################
+#                                                                             #
+#                  7. Compute Sum matrix                                      #
+#                                                                             #
+###############################################################################
+
+def compute_sum_matrix(
+    input_dir: str,
+    output_path: str,
+) -> pd.DataFrame:
+    """
+    Compute the SUM transition matrix by aggregating all annual intervals.
+
+    Parameters
+    ----------
+    input_dir : str
+        Path to the directory containing annual km2 CSV files.
+    output_path : str
+        Full path (including filename) to save the resulting SUM matrix.
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated SUM transition matrix.
+    """
+    # 1. List all annual transition files (e.g., 2001_2002, 2002_2003...)
+    # Matches the pattern: transition_matrix_km2_YYYY_YYYY.csv
+    file_pattern = os.path.join(
+        input_dir,
+        "transition_matrix_km2_????_????.csv",
+    )
+    all_files = glob.glob(file_pattern)
+
+    if not all_files:
+        raise FileNotFoundError(
+            f"No annual km2 matrices found in {input_dir}",
+        )
+
+    # 2. Sort files to ensure chronological order (optional, but good practice)
+    all_files.sort()
+
+    df_sum = None
+
+    # 3. Iterate and aggregate
+    for file_path in all_files:
+        # Load current annual matrix
+        df_annual = pd.read_csv(
+            file_path,
+            index_col=0,
+        )
+
+        if df_sum is None:
+            # Initialize with the first matrix
+            df_sum = df_annual.copy()
+        else:
+            # Sum values cell by cell
+            df_sum = df_sum.add(
+                df_annual,
+                fill_value=0.0,
+            )
+
+    # 4. Save the consolidated SUM matrix
+    if df_sum is not None:
+        df_sum.to_csv(output_path)
+        print(f"SUM matrix successfully saved to: {output_path}")
+
+    return df_sum
