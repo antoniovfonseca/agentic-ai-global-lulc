@@ -1336,6 +1336,7 @@ def label_id_to_name(
 def plot_heatmap(
     df: pd.DataFrame,
     title: str,
+    class_labels_dict: dict,
     save_path: Optional[str] = None,
     figsize: Optional[Tuple[float, float]] = None,
     cmap: str = "YlOrRd",
