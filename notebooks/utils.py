@@ -1005,7 +1005,6 @@ def compute_and_save_components(
         matrix: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Internal helper to decompose a matrix into Exchange and Shift."""
-        # Ensure diagonal (persistence) is zero for component logic
         m_calc = matrix.copy()
         np.fill_diagonal(
             m_calc,
@@ -1018,14 +1017,27 @@ def compute_and_save_components(
         shift = m_calc - exchange
         return exchange, shift
 
-    # 1. Ensure matrices are aligned and have the same shape/labels
+    # 1. Flexible sorting to handle names like 'Developed'
+    # It tries to match the name to the metadata order, otherwise uses alphabetical
+    name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
+    
+    def _custom_sort_key(label):
+        # Try to get ID from metadata name, then try to parse as int, else string
+        if label in name_to_id:
+            return (0, name_to_id[label])
+        try:
+            return (0, int(label))
+        except (ValueError, TypeError):
+            return (1, str(label))
+
     all_labels = sorted(
         list(
             set(df_sum.index).union(df_sum.columns),
         ),
-        key=lambda x: int(x),
+        key=_custom_sort_key,
     )
     
+    # 2. Reindex and align matrices
     df_sum = df_sum.reindex(
         index=all_labels,
         columns=all_labels,
@@ -1036,13 +1048,12 @@ def compute_and_save_components(
         columns=all_labels,
     ).fillna(0.0)
 
-    # 2. Calculate Allocation Components (from Extent)
+    # 3. Calculate Allocation Components (from Extent)
     alloc_exc, alloc_shift = _get_exchange_and_shift(
         df_ext.values,
     )
 
-    # 3. Calculate Alternation Components (from Sum - Extent)
-    # This represents the transitions that occurred but were not 'net' changes
+    # 4. Calculate Alternation Components (from Sum - Extent)
     alternation_raw = np.maximum(
         df_sum.values - df_ext.values,
         0.0,
@@ -1051,7 +1062,7 @@ def compute_and_save_components(
         alternation_raw,
     )
 
-    # 4. Map and Save
+    # 5. Map and Save all 6 required files
     components = {
         "allocation_exchange": alloc_exc,
         "allocation_shift": alloc_shift,
