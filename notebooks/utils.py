@@ -202,140 +202,85 @@ def view_local_rasters(input_dir=DEFAULT_INPUT_DIR):
 #                                                                             #
 ###############################################################################
 
-def process_and_save_pixel_counts_csv(
-    image_paths,
-    years,
-    class_labels_dict,
-    output_dir,
-    no_data_value=noData_value,
-):
+def export_global_pixel_counts_tasks(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 30,
+    max_pixels: float = 1e13
+) -> list:
     """
-    Processes raster images to count pixels per class and exports the results to a CSV file.
+    Triggers Earth Engine tasks to calculate the frequency histogram (pixel counts)
+    of the global GLANCE categorical images for a list of years and exports them 
+    to Google Drive as CSV files.
 
     Parameters
     ----------
-    image_paths : list of str
-        List of file paths to the raster images (must be sorted).
-    years : list of str or int
-        List of years corresponding to the images.
-    class_labels_dict : dict
-        Dictionary mapping class IDs to metadata (must contain "name" and "color").
-    output_dir : str
-        Directory path where the output CSV will be saved.
-    no_data_value : int, optional
-        Pixel value to be treated as NoData.
+    year_list : list of int
+        A list of 4-digit years to process (e.g., [2001, 2002, 2003]).
+    drive_folder : str
+        The name of the Google Drive folder where the CSVs will be saved.
+    scale : int, optional
+        The scale in meters for the GEE reduction. Default is 30.
+    max_pixels : float, optional
+        The maximum number of pixels to process in GEE. Default is 1e13.
 
     Returns
     -------
-    pd.DataFrame
-        The pivot table containing pixel counts per year and class.
+    list of ee.batch.Task
+        A list containing all the triggered Earth Engine tasks.
     """
-    # 1. Validate that input lengths match
-    if len(image_paths) != len(years):
-        raise ValueError(
-            f"Input mismatch: {len(image_paths)} images vs {len(years)} years.",
+    # 1. Define global bounding box geometry
+    global_geom = ee.Geometry.Polygon(
+        [[[-180, -90], [180, -90], [180, 90], [-180, 90]]],
+        None,
+        False
+    )
+
+    # 2. Access the GLANCE collection using global constants defined in utils.py
+    glance_collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
+
+    # 3. Initialize an empty list to store the tasks
+    tasks_list = []
+
+    # 4. Iterate over the provided list of years
+    for year in year_list:
+        # 5. Filter the collection for the specific year
+        image_year = glance_collection.filter(
+            ee.Filter.calendarRange(year, year, 'year')
+        ).first()
+
+        # 6. Calculate the frequency histogram
+        # Note: tileScale=16 is used to avoid memory limit errors in global reductions
+        histogram = image_year.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=global_geom,
+            scale=scale,
+            maxPixels=max_pixels,
+            tileScale=16
         )
 
-    records: list[dict] = []
+        # 7. Extract the dictionary and convert it to a FeatureCollection
+        counts_dict = ee.Dictionary(histogram.get(GLANCE_CLASS_BAND))
+        feature_collection = ee.FeatureCollection([
+            ee.Feature(None, counts_dict)
+        ])
 
-    # 2. Iterate through each year and corresponding image path
-    for year, path in zip(
-        years,
-        image_paths,
-    ):
-        # 3. Read the raster data
-        with rasterio.open(
-            path,
-        ) as src:
-            data = src.read(
-                1,
-            )
-
-        # 4. Count unique pixel values
-        values, counts = np.unique(
-            data,
-            return_counts=True,
+        # 8. Define the export task parameters
+        export_name = f"Pixel_Counts_LULC_{year}"
+        task = ee.batch.Export.table.toDrive(
+            collection=feature_collection,
+            description=export_name,
+            folder=drive_folder,
+            fileFormat='CSV'
         )
 
-        # 5. Process counts and map to class names
-        for value, count in zip(
-            values,
-            counts,
-        ):
-            value = int(value)
+        # 9. Start the task and append it to the list
+        task.start()
+        print(f"Task started: {export_name} (Scale: {scale}m)")
+        tasks_list.append(task)
 
-            # Filter out NoData values
-            if value == no_data_value:
-                continue
-
-            # Skip classes not defined in the dictionary
-            if value not in class_labels_dict:
-                continue
-
-            records.append(
-                {
-                    "Year": year,
-                    "ClassID": value,
-                    "ClassName": class_labels_dict[value]["name"],
-                    "Pixels": int(count),
-                },
-            )
-
-    # 6. Create DataFrame and Pivot Table
-    df_pixels = pd.DataFrame(
-        records,
-    )
-
-    pivot_pixels = (
-        df_pixels.pivot_table(
-            index="Year",
-            columns="ClassName",
-            values="Pixels",
-            aggfunc="sum",
-        )
-        .fillna(
-            0,
-        )
-        .astype(
-            int,
-        )
-    )
-
-    # 7. Save CSV file
-    tables_dir = os.path.join(
-        output_dir,
-        "tables",
-    )
-
-    os.makedirs(
-        tables_dir,
-        exist_ok=True,
-    )
-
-    csv_output_path = os.path.join(
-        tables_dir,
-        "pixels_per_class_per_year.csv",
-    )
-
-    pivot_pixels.to_csv(
-        csv_output_path,
-        index_label="Year",
-    )
-
-    print(
-        f"CSV file saved to: {csv_output_path}",
-    )
-
-    return pivot_pixels
-
-# 8. Execute the function
-df_result = process_and_save_pixel_counts_csv(
-    image_paths=image_paths,
-    years=years,
-    class_labels_dict=class_labels_dict,
-    output_dir=output_path,
-    no_data_value=noData_value,
-)
+    # 10. Return the list of triggered tasks
+    return tasks_list
 
 ###############################################################################
 #                                                                             #
