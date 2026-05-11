@@ -283,25 +283,73 @@ def export_global_pixel_counts_tasks(
     return tasks_list
 
 def plot_pixel_counts_bar_chart(
-    pivot_pixels: pd.DataFrame,
+    input_dir: str,
     class_labels_dict: dict,
     output_dir: str,
 ) -> None:
     """
-    Generates and saves a stacked bar chart of pixel counts per class over time.
+    Reads yearly GEE pixel count CSVs, aggregates them, and generates a 
+    stacked bar chart of pixel counts per class over time.
 
     Parameters
     ----------
-    pivot_pixels : pd.DataFrame
-        The pivot table containing pixel counts per year and class.
+    input_dir : str
+        Directory path containing the Earth Engine CSVs (e.g., Pixel_Counts_LULC_2001.csv).
     class_labels_dict : dict
         Dictionary mapping class IDs to metadata (must contain "name" and "color").
     output_dir : str
         Directory path where the output plot will be saved.
     """
+    import os
+    import glob
+    import re
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as ticker
+
+    # 1. Read and aggregate GEE CSVs
+    csv_pattern = os.path.join(input_dir, "*.csv")
+    csv_files = glob.glob(csv_pattern)
+
+    yearly_data = {}
+    for file in csv_files:
+        basename = os.path.basename(file)
+        # Extract 4-digit year from the filename
+        match = re.search(r"(\d{4})", basename)
+        if not match:
+            continue
+        
+        year = int(match.group(1))
+        df_csv = pd.read_csv(file)
+        
+        row_dict = {}
+        for col in df_csv.columns:
+            try:
+                # Convert string column names (e.g., '1', '2') to integer IDs
+                class_id = int(col)
+                if class_id in class_labels_dict:
+                    class_name = class_labels_dict[class_id]["name"]
+                    row_dict[class_name] = df_csv[col].sum()
+            except ValueError:
+                # Ignore non-integer columns (like 'system:index')
+                pass
+        
+        if row_dict:
+            yearly_data[year] = row_dict
+
+    if not yearly_data:
+        print(f"No valid GEE CSV data found in {input_dir}")
+        return
+
+    # Create pivot table from aggregated data
+    pivot_pixels = pd.DataFrame.from_dict(yearly_data, orient='index').fillna(0)
+    pivot_pixels.sort_index(inplace=True)
+    pivot_pixels.index.name = "Year"
+
     years_array = pivot_pixels.index.values
 
-    # 1. Determine Y-axis scaling factor and label
+    # 2. Determine Y-axis scaling factor and label
     max_val = pivot_pixels.to_numpy().max()
 
     if max_val >= 1_000_000_000_000:
@@ -325,7 +373,7 @@ def plot_pixel_counts_bar_chart(
 
     pivot_scaled = pivot_pixels / scale_factor
 
-    # 2. Prepare color map and sorting logic
+    # 3. Prepare color map and sorting logic
     class_ids_plot = sorted(
         class_labels_dict.keys(),
     )
@@ -375,7 +423,7 @@ def plot_pixel_counts_bar_chart(
         reversed(classes_for_stack),
     )
 
-    # 3. Generate the Stacked Bar Chart
+    # 4. Generate the Stacked Bar Chart
     fig, ax = plt.subplots(
         figsize=(
             10,
@@ -413,7 +461,7 @@ def plot_pixel_counts_bar_chart(
         patches_by_class[cls] = bars[0]
         base += values_cls
 
-    # 4. Configure Axes
+    # 5. Configure Axes
     ax.set_xticks(
         x,
     )
@@ -468,7 +516,7 @@ def plot_pixel_counts_bar_chart(
         ),
     )
 
-    # 5. Add Legend
+    # 6. Add Legend
     handles = [
         patches_by_class[cls]
         for cls in classes_for_legend
@@ -497,7 +545,7 @@ def plot_pixel_counts_bar_chart(
 
     plt.tight_layout()
 
-    # 6. Save Figure
+    # 7. Save Figure
     charts_dir = os.path.join(
         output_dir,
         "charts",
@@ -519,38 +567,8 @@ def plot_pixel_counts_bar_chart(
         bbox_inches="tight",
         dpi=300,
     )
-
-
-# 7. Execute the function by reading the saved CSV
-tables_dir = os.path.join(
-    output_path,
-    "tables",
-)
-
-csv_input_path = os.path.join(
-    tables_dir,
-    "pixels_per_class_per_year.csv",
-)
-
-# Check if the file exists to avoid errors
-if os.path.exists(csv_input_path):
-    # Load the CSV into a DataFrame, setting 'Year' back as the index
-    df_loaded = pd.read_csv(
-        csv_input_path,
-        index_col="Year",
-    )
-
-    # Generate the plot using the loaded data
-    plot_pixel_counts_bar_chart(
-        pivot_pixels=df_loaded,
-        class_labels_dict=class_labels_dict,
-        output_dir=output_path,
-    )
-else:
-    print(
-        f"Error: Could not find the CSV file at {csv_input_path}. "
-        "Please run the pixel counting cell first."
-    )
+    print(f"Chart successfully saved at: {out_fig}")
+    plt.show()
 
 ###############################################################################
 #                                                                             #
