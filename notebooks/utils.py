@@ -247,7 +247,7 @@ def export_global_pixel_counts_tasks(
         # 5. Filter the collection for the specific year
         image_year = glance_collection.filter(
             ee.Filter.calendarRange(year, year, 'year')
-        ).first()
+        ).mosaic()
 
         # 6. Calculate the frequency histogram
         # Note: tileScale=16 is used to avoid memory limit errors in global reductions
