@@ -202,46 +202,39 @@ def view_local_rasters(input_dir=DEFAULT_INPUT_DIR):
 #                                                                             #
 ###############################################################################
 
-def process_and_plot_pixel_counts(
-    input_dir=DEFAULT_INPUT_DIR,
-    output_dir=DEFAULT_OUTPUT_DIR,
-    no_data_value=NODATA_VALUE,
+def process_and_save_pixel_counts_csv(
+    image_paths,
+    years,
+    class_labels_dict,
+    output_dir,
+    no_data_value=noData_value,
 ):
     """
-    Processes raster images to count pixels per class, plots a stacked bar chart,
-    and exports the results to a CSV file.
+    Processes raster images to count pixels per class and exports the results to a CSV file.
 
     Parameters
     ----------
-    input_dir : str, optional
-        Directory path where the masked .tif files are located. 
-        Defaults to DEFAULT_INPUT_DIR.
-    output_dir : str, optional
-        Directory path where the output plot and CSV will be saved.
-        Defaults to DEFAULT_OUTPUT_DIR.
+    image_paths : list of str
+        List of file paths to the raster images (must be sorted).
+    years : list of str or int
+        List of years corresponding to the images.
+    class_labels_dict : dict
+        Dictionary mapping class IDs to metadata (must contain "name" and "color").
+    output_dir : str
+        Directory path where the output CSV will be saved.
     no_data_value : int, optional
-        Pixel value to be treated as NoData. Defaults to NODATA_VALUE.
+        Pixel value to be treated as NoData.
 
     Returns
     -------
     pd.DataFrame
         The pivot table containing pixel counts per year and class.
     """
-
-    # 1. File Discovery and Sorting
-    # Find all .tif files in the input directory
-    search_pattern = os.path.join(input_dir, "*.tif")
-    raw_paths = glob.glob(search_pattern)
-
-    # Sort files chronologically using the helper function
-    # Note: Ensure 'get_year_from_filename' is defined in utils.py
-    image_paths = sorted(raw_paths, key=get_year_from_filename)
-    years = [get_year_from_filename(p) for p in image_paths]
-
-    # Stop if no files are found
-    if not image_paths:
-        print(f"No .tif files found in {input_dir}")
-        return None
+    # 1. Validate that input lengths match
+    if len(image_paths) != len(years):
+        raise ValueError(
+            f"Input mismatch: {len(image_paths)} images vs {len(years)} years.",
+        )
 
     records: list[dict] = []
 
@@ -275,15 +268,15 @@ def process_and_plot_pixel_counts(
             if value == no_data_value:
                 continue
 
-            # Skip classes not defined in the global metadata
-            if value not in GLANCE_METADATA:
+            # Skip classes not defined in the dictionary
+            if value not in class_labels_dict:
                 continue
 
             records.append(
                 {
                     "Year": year,
                     "ClassID": value,
-                    "ClassName": GLANCE_METADATA[value]["name"],
+                    "ClassName": class_labels_dict[value]["name"],
                     "Pixels": int(count),
                 },
             )
@@ -308,235 +301,41 @@ def process_and_plot_pixel_counts(
         )
     )
 
-    years_array = pivot_pixels.index.values
-
-    # 7. Determine Y-axis scaling factor and label
-    max_val = pivot_pixels.to_numpy().max()
-
-    if max_val >= 1_000_000:
-        scale_factor = 1_000_000
-        y_label = "Area (million pixels)"
-    elif max_val >= 1_000:
-        scale_factor = 1_000
-        y_label = "Area (thousand pixels)"
-    elif max_val >= 100:
-        scale_factor = 100
-        y_label = "Area (hundred pixels)"
-    else:
-        scale_factor = 1
-        y_label = "Area (pixels)"
-
-    pivot_scaled = pivot_pixels / scale_factor
-
-    # 8. Prepare color map and sorting logic
-    class_ids_plot = sorted(GLANCE_METADATA.keys())
-
-    color_map = {
-        GLANCE_METADATA[class_id]["name"]: GLANCE_METADATA[class_id]["color"]
-        for class_id in class_ids_plot
-    }
-
-    # Calculate Net Change to determine stack order
-    first_year = years_array[0]
-    last_year = years_array[-1]
-
-    # Handle cases where a class might be missing in first or last year
-    try:
-        net_change_per_class = (
-            pivot_scaled.loc[last_year]
-            - pivot_scaled.loc[first_year]
-        )
-    except KeyError:
-        # Fallback if specific years are missing, use first/last available
-        net_change_per_class = (
-            pivot_scaled.iloc[-1]
-            - pivot_scaled.iloc[0]
-        )
-
-    # Map names back to IDs for tie-breaking
-    name_to_id_map = {
-        v["name"]: k
-        for k, v in GLANCE_METADATA.items()
-    }
-
-    df_sorting = net_change_per_class.to_frame(
-        name="net_change",
-    )
-    df_sorting["class_id"] = df_sorting.index.map(
-        name_to_id_map,
-    )
-
-    # Sort: Net Change (Desc) then Class ID (Desc)
-    classes_for_stack = list(
-        df_sorting.sort_values(
-            by=[
-                "net_change",
-                "class_id",
-            ],
-            ascending=[
-                False,
-                False,
-            ],
-        ).index,
-    )
-
-    # Legend order: Reversed stack order
-    classes_for_legend = list(
-        reversed(classes_for_stack),
-    )
-
-    # 9. Generate the Stacked Bar Chart
-    fig, ax = plt.subplots(
-        figsize=(
-            10,
-            6,
-        ),
-    )
-
-    x = np.arange(
-        len(years_array),
-    )
-    width = 0.9
-    base = np.zeros(
-        len(years_array),
-        dtype=float,
-    )
-    patches_by_class: dict[str, plt.Artist] = {}
-
-    for cls in classes_for_stack:
-        if cls not in pivot_scaled.columns:
-            continue
-
-        values_cls = pivot_scaled[cls].reindex(
-            years_array,
-            fill_value=0.0,
-        ).values
-
-        bars = ax.bar(
-            x,
-            values_cls,
-            bottom=base,
-            width=width,
-            label=cls,
-            color=color_map.get(cls, "gray"),
-        )
-        patches_by_class[cls] = bars[0]
-        base += values_cls
-
-    # 10. Configure Axes
-    ax.set_xticks(
-        x,
-    )
-    ax.set_xticklabels(
-        years_array,
-    )
-
-    # Adaptive rotation for X-axis labels
-    n_labels = len(years_array)
-    if n_labels <= 7:
-        rotation = 0
-        ha = "center"
-    elif n_labels <= 12:
-        rotation = 45
-        ha = "right"
-    else:
-        rotation = 90
-        ha = "center"
-
-    plt.setp(
-        ax.get_xticklabels(),
-        rotation=rotation,
-        ha=ha,
-    )
-
-    ax.tick_params(
-        axis="both",
-        labelsize=14,
-    )
-    ax.set_ylabel(
-        y_label,
-        fontsize=18,
-    )
-    ax.set_xlabel(
-        "Time points",
-        fontsize=18,
-    )
-    ax.set_title(
-        "Number of pixels per class",
-        fontsize=20,
-    )
-
-    # Y-axis limit and formatting
-    y_max_scaled = base.max() * 1.1 if base.max() > 0 else 1.0
-    ax.set_ylim(
-        0,
-        y_max_scaled,
-    )
-    ax.yaxis.set_major_locator(
-        ticker.MaxNLocator(
-            nbins=5,
-            integer=True,
-        ),
-    )
-    ax.yaxis.set_major_formatter(
-        ticker.FormatStrFormatter(
-            "%d",
-        ),
-    )
-
-    # 11. Add Legend
-    handles = [
-        patches_by_class[cls]
-        for cls in classes_for_legend
-        if cls in patches_by_class
-    ]
-    labels = [
-        cls
-        for cls in classes_for_legend
-        if cls in patches_by_class
-    ]
-
-    ax.legend(
-        handles,
-        labels,
-        bbox_to_anchor=(
-            1.05,
-            1.0,
-        ),
-        loc="upper left",
-        frameon=False,
-        fontsize=12,
-    )
-
-    plt.tight_layout()
-
-    # 12. Save Figure
-    out_fig = os.path.join(
+    # 7. Save CSV file
+    tables_dir = os.path.join(
         output_dir,
-        "graph_pixel_per_class.png",
+        "tables",
     )
-    plt.savefig(
-        out_fig,
-        format="png",
-        bbox_inches="tight",
-        dpi=300,
-    )
-    plt.show()
 
-    # 13. Save CSV
+    os.makedirs(
+        tables_dir,
+        exist_ok=True,
+    )
+
     csv_output_path = os.path.join(
-        output_dir,
+        tables_dir,
         "pixels_per_class_per_year.csv",
     )
+
     pivot_pixels.to_csv(
         csv_output_path,
         index_label="Year",
     )
+
     print(
-        f"Files saved to: {output_dir}",
+        f"CSV file saved to: {csv_output_path}",
     )
 
     return pivot_pixels
+
+# 8. Execute the function
+df_result = process_and_save_pixel_counts_csv(
+    image_paths=image_paths,
+    years=years,
+    class_labels_dict=class_labels_dict,
+    output_dir=output_path,
+    no_data_value=noData_value,
+)
 
 ###############################################################################
 #                                                                             #
