@@ -1513,6 +1513,467 @@ def export_global_number_of_changes_raster_task(
 
     return task
 
+import os
+import glob
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib.patches import Patch
+from matplotlib.ticker import FuncFormatter
+import rasterio
+from pyproj import Transformer, Geod
+from matplotlib_scalebar.scalebar import ScaleBar
+
+# 1. Provide a stub for north_arrow if not defined
+def north_arrow(
+    ax,
+    location="upper right",
+    shadow=False,
+    rotation=None,
+    scale=0.3,
+) -> None:
+    """
+    Placeholder for north_arrow function.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        The axes to draw the arrow on.
+    location : str, optional
+        Location of the arrow.
+    shadow : bool, optional
+        Whether to draw a shadow.
+    rotation : dict, optional
+        Rotation parameters.
+    scale : float, optional
+        Scale of the arrow.
+    """
+    pass
+
+def compute_display_pixel_size_km(
+    raster_path: str,
+    downsample_divisor: int,
+) -> float:
+    """
+    Compute horizontal resolution in kilometers per displayed pixel.
+
+    Parameters
+    ----------
+    raster_path : str
+        Path to a raster file used to derive spatial extent and CRS.
+    downsample_divisor : int
+        Integer factor used to downsample the raster width for display.
+
+    Returns
+    -------
+    float
+        Pixel size in kilometers for the downsampled display grid.
+    """
+    # 1. Open the raster to retrieve bounds and CRS
+    with rasterio.open(
+        raster_path,
+    ) as src:
+        left, bottom, right, top = src.bounds
+        lat_mid_src = (top + bottom) / 2.0
+
+        # 2. Transform the coordinates to latitude and longitude
+        to_ll = Transformer.from_crs(
+            src.crs,
+            "EPSG:4326",
+            always_xy=True,
+        )
+        lon_l, lat_mid = to_ll.transform(
+            left,
+            lat_mid_src,
+        )
+        lon_r, _ = to_ll.transform(
+            right,
+            lat_mid_src,
+        )
+
+        # 3. Calculate the distance in meters between the boundaries
+        geod = Geod(
+            ellps="WGS84",
+        )
+        _, _, width_m = geod.inv(
+            lon_l,
+            lat_mid,
+            lon_r,
+            lat_mid,
+        )
+
+        # 4. Determine the number of displayed columns after downsampling
+        cols_disp = max(
+            1,
+            src.width // downsample_divisor,
+        )
+
+        return (width_m / cols_disp) / 1_000
+
+def plot_number_of_changes_map(
+    output_dir: str,
+    nodata_val: int,
+    raster_filename: str = "Number_of_Changes_Raster",
+    scale_factor: float = 0.05,
+) -> None:
+    """
+    Plot the Number of Changes raster map with cartographic elements.
+
+    This function has been adapted to read multiple tiles from GEE
+    using a Virtual Raster (VRT) and applies downsampling to prevent
+    Out-Of-Memory (OOM) errors on large global rasters.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing the raster files and where the map will be saved.
+    nodata_val : int
+        Value representing NoData in the raster to be masked out.
+    raster_filename : str, optional
+        Prefix of the raster tiles to plot (default is "Number_of_Changes_Raster").
+    scale_factor : float, optional
+        Downsampling factor to reduce memory usage (default is 0.05).
+
+    Returns
+    -------
+    None
+        This function does not return a value; it saves a PNG file to disk
+        and displays the plot.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no matching raster tiles are found in the output directory.
+    """
+    # 1. Locate all raster tiles exported by GEE
+    raster_files = glob.glob(
+        os.path.join(
+            output_dir,
+            f"{raster_filename}*.tif",
+        )
+    )
+
+    if not raster_files:
+        raise FileNotFoundError(
+            f"Raster tiles not found for prefix: {raster_filename}.",
+        )
+
+    # 2. Create a temporary Virtual Raster (VRT) to merge tiles
+    vrt_path = os.path.join(
+        output_dir,
+        "merged_changes.vrt",
+    )
+
+    files_str = " ".join(
+        [
+            f'"{f}"'
+            for f in raster_files
+        ]
+    )
+    os.system(
+        f"gdalbuildvrt {vrt_path} {files_str}",
+    )
+
+    # 3. Calculate the pixel size for the scale bar
+    downsample_divisor = int(
+        1 / scale_factor,
+    ) if scale_factor < 1 else 1
+
+    pixel_size_km = compute_display_pixel_size_km(
+        raster_path=vrt_path,
+        downsample_divisor=downsample_divisor,
+    )
+
+    # 4. Read the raster and basic metadata with downsampling
+    with rasterio.open(
+        vrt_path,
+    ) as src:
+        data = src.read(
+            1,
+            out_shape=(
+                int(
+                    src.height * scale_factor,
+                ),
+                int(
+                    src.width * scale_factor,
+                ),
+            ),
+            resampling=rasterio.enums.Resampling.nearest,
+        )
+
+        # Force masking using the provided NoData value
+        data = np.ma.masked_equal(
+            data,
+            nodata_val,
+        )
+
+        left, bottom, right, top = src.bounds
+        src_crs = src.crs
+        
+        # Adjust the affine transform for the new resolution
+        transform = src.transform * src.transform.scale(
+            (
+                src.width / data.shape[1]
+            ),
+            (
+                src.height / data.shape[0]
+            ),
+        )
+
+    # 5. Initialize the figure
+    fig, ax = plt.subplots(
+        figsize=(
+            6,
+            8,
+        ),
+        dpi=300,
+    )
+
+    # 6. Determine the data range
+    min_val = int(
+        np.ma.min(
+            data,
+        ),
+    )
+    max_val = int(
+        np.ma.max(
+            data,
+        ),
+    )
+
+    # 7. Setup the colormap (gray for 0, viridis for the rest)
+    original_cmap = plt.get_cmap(
+        "viridis_r",
+    )
+    color_list = [
+        "#c0c0c0",
+    ] + [
+        original_cmap(i)
+        for i in np.linspace(
+            0,
+            1,
+            max_val,
+        )
+    ]
+    cmap = ListedColormap(
+        color_list,
+    )
+
+    # Discrete normalization
+    bounds = np.arange(
+        min_val,
+        max_val + 2,
+    ) - 0.5
+    
+    norm = BoundaryNorm(
+        bounds,
+        cmap.N,
+    )
+
+    # 8. Plot the raster in original projection coordinates
+    ax.imshow(
+        data,
+        cmap=cmap,
+        interpolation="nearest",
+        norm=norm,
+    )
+
+    # 9. Create the discrete box legend
+    legend_elements = []
+    present_values = np.unique(
+        data.compressed(),
+    )
+
+    for i in range(
+        min_val,
+        max_val + 1,
+    ):
+        # Append to legend ONLY if the class exists in the raster
+        if i in present_values:
+            legend_elements.append(
+                Patch(
+                    facecolor=cmap(
+                        norm(
+                            i,
+                        ),
+                    ),
+                    edgecolor="none",
+                    linewidth=0,
+                    label=str(
+                        i,
+                    ),
+                ),
+            )
+
+    ax.legend(
+        handles=legend_elements,
+        title="Changes",
+        loc="center left",
+        bbox_to_anchor=(
+            1.02,
+            0.5,
+        ),
+        frameon=False,
+        fontsize=8,
+        title_fontsize=10,
+        alignment="left",
+        handlelength=2.0,
+        handleheight=1.5,
+    )
+
+    # 10. Add cartographic elements
+    scalebar = ScaleBar(
+        dx=pixel_size_km,
+        units="km",
+        length_fraction=0.35,
+        location="lower left",
+        box_alpha=0.0,
+        scale_formatter=lambda value, _: f"{int(value)} km",
+    )
+    ax.add_artist(
+        scalebar,
+    )
+
+    north_arrow(
+        ax,
+        location="upper right",
+        shadow=False,
+        rotation={
+            "degrees": 0,
+        },
+        scale=0.3,
+    )
+
+    # 11. Apply axes styling (with Lat/Lon labels)
+    ax.set_title(
+        "Number of Changes",
+        fontsize=18,
+        pad=5,
+    )
+    ax.set_aspect(
+        "equal",
+    )
+
+    # Initialize Transformer (Native CRS -> Lat/Lon)
+    to_latlon = Transformer.from_crs(
+        src_crs,
+        "EPSG:4326",
+        always_xy=True,
+    )
+
+    # Get dimensions from the loaded data
+    height, width = data.shape
+
+    def format_lon(
+        x,
+        pos,
+    ):
+        # Clamp x to be within image bounds
+        x = np.clip(
+            x,
+            0,
+            width - 1,
+        )
+        # Project pixel to map coordinates
+        x_proj, y_proj = rasterio.transform.xy(
+            transform,
+            height // 2,
+            x,
+        )
+        lon, lat = to_latlon.transform(
+            x_proj,
+            y_proj,
+        )
+        return f"{lon:.1f}°"
+
+    def format_lat(
+        y,
+        pos,
+    ):
+        # Clamp y to be within image bounds
+        y = np.clip(
+            y,
+            0,
+            height - 1,
+        )
+        # Project pixel to map coordinates
+        x_proj, y_proj = rasterio.transform.xy(
+            transform,
+            y,
+            width // 2,
+        )
+        lon, lat = to_latlon.transform(
+            x_proj,
+            y_proj,
+        )
+        return f"{lat:.1f}°"
+
+    # Apply the custom formatters
+    ax.xaxis.set_major_formatter(
+        FuncFormatter(
+            format_lon,
+        ),
+    )
+    ax.yaxis.set_major_formatter(
+        FuncFormatter(
+            format_lat,
+        ),
+    )
+
+    # Limit ticks to avoid overcrowding
+    ax.xaxis.set_major_locator(
+        mticker.MaxNLocator(
+            nbins=4,
+        ),
+    )
+    ax.yaxis.set_major_locator(
+        mticker.MaxNLocator(
+            nbins=6,
+        ),
+    )
+
+    # Final styling for ticks
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=7,
+        pad=4,
+    )
+    plt.setp(
+        ax.get_yticklabels(),
+        rotation=90,
+        va="center",
+    )
+
+    # 12. Save and display the figure
+    maps_dir = os.path.join(
+        output_dir,
+        "maps",
+    )
+    os.makedirs(
+        maps_dir,
+        exist_ok=True,
+    )
+
+    output_figure_path = os.path.join(
+        maps_dir,
+        "map_number_of_changes.png",
+    )
+
+    plt.savefig(
+        output_figure_path,
+        dpi=300,
+        bbox_inches="tight",
+        format="png",
+        pad_inches=0.5,
+    )
+    plt.show()
+
+    print(
+        f"Map figure saved successfully to: {output_figure_path}",
+    )
+
 
 ###############################################################################
 #                                                                             #
