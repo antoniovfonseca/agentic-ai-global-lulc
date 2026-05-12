@@ -1065,6 +1065,343 @@ def plot_global_change_frequency_bar_chart(
         f"Chart saved to: {output_fig}",
     )
 
+import os
+import glob
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+from matplotlib.patches import Patch
+
+def plot_number_of_changes_distribution(
+    input_dir: str,
+    output_dir: str,
+) -> None:
+    """
+    Generate a single stacked bar chart of the number of changes distribution.
+
+    This function calculates the percentage of unique pixels that underwent
+    1, 2, 3, or N total changes relative to the ENTIRE valid study area,
+    using GEE-exported CSVs.
+
+    Parameters
+    ----------
+    input_dir : str
+        Directory containing both 'Pixel_Counts_LULC_*.csv' (for total area)
+        and 'Number_Change_*.csv' files.
+    output_dir : str
+        Directory to save the resulting figure.
+
+    Returns
+    -------
+    None
+    """
+    # 1. Read the pixel counts to find the TRUE total valid study area
+    pixel_count_files = glob.glob(
+        os.path.join(
+            input_dir,
+            "Pixel_Counts_LULC_*.csv",
+        )
+    )
+    if not pixel_count_files:
+        print(
+            "No Pixel_Counts_LULC CSVs found to calculate total study area.",
+        )
+        return
+
+    # Read the first pixel count file to get total valid pixels
+    df_pixels = pd.read_csv(
+        pixel_count_files[0],
+    )
+    num_cols_pixels = [
+        c for c in df_pixels.select_dtypes(
+            include=['number'],
+        ).columns
+        if 'system' not in c
+    ]
+    total_study_area_pixels = df_pixels[
+        num_cols_pixels
+    ].sum().sum()
+
+    # 2. Read and compile the Number_Change CSVs
+    change_files = glob.glob(
+        os.path.join(
+            input_dir,
+            "Number_Change_*.csv",
+        )
+    )
+    if not change_files:
+        print(
+            "No Number_Change CSVs found.",
+        )
+        return
+
+    records = {}
+    for file_path in change_files:
+        df_temp = pd.read_csv(
+            file_path,
+        )
+        num_cols = [
+            c for c in df_temp.select_dtypes(
+                include=['number'],
+            ).columns
+            if 'system' not in c
+        ]
+        if num_cols:
+            records[
+                os.path.basename(file_path)
+            ] = df_temp[
+                num_cols
+            ].sum()
+
+    if not records:
+        print(
+            "No valid data found in Number_Change CSVs.",
+        )
+        return
+
+    df_compiled = pd.DataFrame.from_dict(
+        records,
+        orient='index',
+    ).fillna(
+        0,
+    )
+
+    # Fix column names to string integers
+    new_cols = {}
+    for c in df_compiled.columns:
+        try:
+            new_cols[
+                c
+            ] = str(
+                int(float(c))
+            )
+        except ValueError:
+            new_cols[
+                c
+            ] = str(
+                c,
+            )
+    df_compiled.rename(
+        columns=new_cols,
+        inplace=True,
+    )
+
+    # 3. Calculate the true number of unique pixels per change category
+    unique_pixels_per_change = {}
+
+    for col_name in df_compiled.columns:
+        if not col_name.isdigit():
+            continue
+
+        n_changes = int(
+            col_name,
+        )
+        total_transitions = df_compiled[
+            col_name
+        ].sum()
+
+        if n_changes > 0:
+            unique_pixels = total_transitions / n_changes
+        else:
+            unique_pixels = 0
+
+        unique_pixels_per_change[
+            n_changes
+        ] = unique_pixels
+
+    # 4. Calculate percentages relative to the entire study area
+    percentages = {}
+    for n_changes, count in unique_pixels_per_change.items():
+        if total_study_area_pixels > 0:
+            pct = (count / total_study_area_pixels) * 100.0
+        else:
+            pct = 0.0
+
+        percentages[
+            n_changes
+        ] = pct
+
+    # 5. Setup Colors
+    active_changes = [
+        k for k, v in percentages.items()
+        if v > 0
+    ]
+
+    if not active_changes:
+        active_changes = list(
+            percentages.keys(),
+        )
+
+    n_colors = len(
+        active_changes,
+    )
+    cmap = plt.cm.viridis_r
+
+    sorted_changes_desc = sorted(
+        active_changes,
+        reverse=True,
+    )
+
+    colors = {
+        n: cmap(
+            i / (n_colors - 1)
+        )
+        if n_colors > 1
+        else cmap(
+            0.5,
+        )
+        for i, n in enumerate(
+            sorted(
+                active_changes,
+            )
+        )
+    }
+
+    # 6. Create the Figure
+    fig, ax = plt.subplots(
+        figsize=(
+            6,
+            6,
+        ),
+    )
+
+    bottom = 0.0
+    for n_change in sorted_changes_desc:
+        val = percentages[
+            n_change
+        ]
+        if val > 0:
+            ax.bar(
+                0,
+                val,
+                bottom=bottom,
+                color=colors[
+                    n_change
+                ],
+                width=0.4,
+                edgecolor="none",
+            )
+            bottom += val
+
+    # 7. Formatting the Axes
+    ax.set_ylabel(
+        "Change (% of study area)",
+        fontsize=16,
+    )
+
+    ax.set_title(
+        "Number of Changes Overall",
+        fontsize=18,
+        pad=15,
+    )
+
+    for spine in [
+        "top",
+        "right",
+        "bottom",
+        "left",
+    ]:
+        ax.spines[
+            spine
+        ].set_visible(
+            True,
+        )
+        ax.spines[
+            spine
+        ].set_color(
+            "black",
+        )
+        ax.spines[
+            spine
+        ].set_linewidth(
+            0.5,
+        )
+
+    ax.tick_params(
+        axis="y",
+        which="major",
+        labelsize=18,
+    )
+
+    ax.set_xticks(
+        [],
+    )
+
+    # Note: Keep Y-axis limit at 105 so the scale is always absolute
+    max_y = bottom * 1.05 if bottom > 0 else 1.0
+
+    ax.set_ylim(
+        0,
+        max_y,
+    )
+
+    # Define the number of bins
+    ax.yaxis.set_major_locator(
+        mticker.MaxNLocator(
+            integer=True,
+            nbins=10,
+        ),
+    )
+
+    # 8. Legend
+    legend_elements = []
+
+    for n in sorted(active_changes):
+        legend_elements.append(
+            Patch(
+                facecolor=colors[n],
+                label=str(n),
+            )
+        )
+
+    ax.legend(
+        handles=legend_elements,
+        title="Changes",
+        title_fontsize=16,
+        loc="center left",
+        bbox_to_anchor=(
+            1.05,
+            0.5,
+        ),
+        fontsize=14,
+        frameon=False,
+    )
+
+    # Force the main plotting box to always occupy the exact same spatial coordinates in the figure
+    fig.subplots_adjust(
+        left=0.15,
+        right=0.75,
+        bottom=0.1,
+        top=0.9,
+    )
+
+    # 9. Save and show the figure
+    charts_dir = os.path.join(
+        output_dir,
+        "charts",
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True,
+    )
+
+    out_fig_path = os.path.join(
+        charts_dir,
+        "chart_number_changes_percentage_overall.png",
+    )
+
+    plt.savefig(
+        out_fig_path,
+        dpi=300,
+        bbox_inches="tight",
+        format="png",
+    )
+    plt.show()
+    print(
+        f"Chart saved to: {out_fig_path}",
+    )
+
 ###############################################################################
 #                                                                             #
 #                  5. TRANSITION MATRIX                                       #
