@@ -1551,65 +1551,59 @@ def north_arrow(
     """
     pass
 
+from pyproj import Geod
+
 def compute_display_pixel_size_km(
-    raster_path: str,
-    downsample_divisor: int,
+    lon_l: float,
+    lon_r: float,
+    lat_mid: float,
+    width_pixels: int,
 ) -> float:
     """
-    Compute horizontal resolution in kilometers per displayed pixel.
+    Calculate the real size of a pixel in kilometers for the scale bar.
 
     Parameters
     ----------
-    raster_path : str
-        Path to a raster file used to derive spatial extent and CRS.
-    downsample_divisor : int
-        Integer factor used to downsample the raster width for display.
+    lon_l : float
+        Left longitude of the map extent.
+    lon_r : float
+        Right longitude of the map extent.
+    lat_mid : float
+        Middle latitude of the map extent.
+    width_pixels : int
+        Number of pixels in the width of the image.
 
     Returns
     -------
     float
-        Pixel size in kilometers for the downsampled display grid.
+        The size of a single pixel in kilometers.
     """
-    # 1. Open the raster to retrieve bounds and CRS
-    with rasterio.open(
-        raster_path,
-    ) as src:
-        left, bottom, right, top = src.bounds
-        lat_mid_src = (top + bottom) / 2.0
+    # Initialize the Geodetic calculator using the WGS84 ellipsoid
+    geod = Geod(ellps="WGS84")
 
-        # 2. Transform the coordinates to latitude and longitude
-        to_ll = Transformer.from_crs(
-            src.crs,
-            "EPSG:4326",
-            always_xy=True,
-        )
-        lon_l, lat_mid = to_ll.transform(
-            left,
-            lat_mid_src,
-        )
-        lon_r, _ = to_ll.transform(
-            right,
-            lat_mid_src,
-        )
+    # Calculate the longitudinal midpoint to split the globe into two hemispheres.
+    # This prevents distance calculation errors across the antimeridian (-180 to 180 degrees).
+    lon_mid = (lon_l + lon_r) / 2.0
 
-        # 3. Calculate the distance in meters between the boundaries
-        geod = Geod(
-            ellps="WGS84",
-        )
-        _, _, width_m = geod.inv(
-            lon_l,
-            lat_mid,
-            lon_r,
-            lat_mid,
-        )
+    # Calculate the horizontal distance of each half and sum them for the total width
+    _, _, dist1 = geod.inv(
+        lon_l,
+        lat_mid,
+        lon_mid,
+        lat_mid,
+    )
+    _, _, dist2 = geod.inv(
+        lon_mid,
+        lat_mid,
+        lon_r,
+        lat_mid,
+    )
+    width_m = dist1 + dist2
 
-        # 4. Determine the number of displayed columns after downsampling
-        cols_disp = max(
-            1,
-            src.width // downsample_divisor,
-        )
+    # Determine the pixel resolution in kilometers
+    dx_km = (width_m / width_pixels) / 1000.0
 
-        return (width_m / cols_disp) / 1_000
+    return dx_km
 
 def plot_number_of_changes_map(
     output_dir: str,
