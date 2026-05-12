@@ -572,6 +572,518 @@ def plot_pixel_counts_bar_chart(
 
 ###############################################################################
 #                                                                             #
+#                  5. NUMBER OF CHANGES FUNCTIONS                             #
+#                                                                             #
+###############################################################################
+def export_global_change_frequency_tasks(
+    year_list: list[int],
+    drive_folder: str,
+    scale: int = 300,
+    max_pixels: float = 1e13,
+) -> list:
+    """
+    Triggers GEE tasks to count pixels changing in each interval,
+    categorized by their total number of changes across the series.
+
+    Parameters
+    ----------
+    year_list : list[int]
+        List of years for indexing.
+    drive_folder : str
+        Directory to save the CSV files in Drive.
+    scale : int, optional
+        Spatial resolution in meters. Defaults to 300.
+    max_pixels : float, optional
+        Maximum pixels for reduceRegion. Defaults to 1e13.
+
+    Returns
+    -------
+    list
+        List of triggered Earth Engine Task objects.
+    """
+    # 1. Define global bounding box geometry
+    global_geom = ee.Geometry.Rectangle(
+        [
+            -180,
+            -90,
+            180,
+            90,
+        ],
+        'EPSG:4326',
+        False,
+    )
+
+    # 2. Extract images for all years
+    images = []
+    for year in year_list:
+        img = ee.ImageCollection(
+            utils.GLANCE_COLLECTION_ID,
+        ).filterDate(
+            f"{year}-01-01",
+            f"{year}-12-31",
+        ).mosaic().select(
+            utils.GLANCE_CLASS_BAND,
+        )
+        images.append(
+            img,
+        )
+
+    # 3. Compute change images per interval
+    change_images = []
+    n_intervals = len(
+        year_list,
+    ) - 1
+
+    for i in range(
+        n_intervals,
+    ):
+        img_curr = images[
+            i
+        ]
+        img_next = images[
+            i + 1
+        ]
+
+        # 4. Binary change mapping (1 if changed, 0 otherwise)
+        change = img_curr.neq(
+            img_next,
+        ).rename(
+            "change",
+        )
+        change_images.append(
+            change,
+        )
+
+    # 5. Compute total changes over the entire time series
+    # Summing all boolean change images
+    total_changes = ee.ImageCollection(
+        change_images,
+    ).sum().rename(
+        "total_changes",
+    )
+
+    tasks_list = []
+
+    # 6. Generate an export task for each interval
+    for i in range(
+        n_intervals,
+    ):
+        y_start = year_list[
+            i
+        ]
+        y_end = year_list[
+            i + 1
+        ]
+        interval_label = f"{y_start}_{y_end}"
+
+        # 7. Mask total_changes to only pixels that changed in THIS interval
+        interval_change_mask = change_images[
+            i
+        ]
+        masked_total = total_changes.updateMask(
+            interval_change_mask,
+        )
+
+        # 8. Reduce region to get the frequency histogram
+        histogram = masked_total.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=global_geom,
+            scale=scale,
+            maxPixels=max_pixels,
+            tileScale=16,
+        )
+
+        # 9. Extract the dictionary and convert it to a FeatureCollection
+        counts_dict = ee.Dictionary(
+            histogram.get(
+                "total_changes",
+            ),
+        )
+        feature = ee.Feature(
+            None,
+            counts_dict,
+        )
+        feature_collection = ee.FeatureCollection(
+            [
+                feature,
+            ]
+        )
+
+        # 10. Define the export task parameters
+        export_name = f"Number_Change_{interval_label}"
+        task = ee.batch.Export.table.toDrive(
+            collection=feature_collection,
+            description=export_name,
+            folder=drive_folder,
+            fileFormat="CSV",
+        )
+
+        # 11. Start the task and append it to the list
+        task.start()
+        print(
+            f"Task started: {export_name} (Scale: {scale}m)",
+        )
+        tasks_list.append(
+            task,
+        )
+
+    return tasks_list
+
+# 12. Trigger the tasks for the Number of Changes section
+print("\nSubmitting Number of Changes Tasks to GEE...")
+change_freq_tasks = export_global_change_frequency_tasks(
+    year_list=years_to_process,
+    drive_folder=gee_drive_folder,
+    scale=300,
+)
+print(f"\nSuccess! {len(change_freq_tasks)} tasks submitted to GEE.")
+
+import os
+import glob
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
+def plot_global_change_frequency_bar_chart(
+    input_dir: str,
+    output_dir: str,
+) -> None:
+    """
+    Create a stacked bar chart showing the sequence of changes per interval
+    by compiling multiple GEE-exported CSV files.
+
+    Parameters
+    ----------
+    input_dir : str
+        Directory containing the 'Number_Change_*.csv' files.
+    output_dir : str
+        Directory to save the resulting figure.
+
+    Returns
+    -------
+    None
+    """
+    # 1. Read and compile the GEE CSV files
+    search_pattern = os.path.join(
+        input_dir,
+        "Number_Change_*.csv",
+    )
+    csv_files = glob.glob(
+        search_pattern,
+    )
+
+    if not csv_files:
+        print(
+            f"No Number_Change CSVs found in {input_dir}",
+        )
+        return
+
+    records = {}
+    for file_path in csv_files:
+        basename = os.path.basename(
+            file_path,
+        )
+        # Extract interval label from filename (e.g. "Number_Change_2001_2010.csv" -> "2001-2010")
+        interval_str = basename.replace(
+            "Number_Change_",
+            "",
+        ).replace(
+            ".csv",
+            "",
+        )
+
+        parts = interval_str.split(
+            "_",
+        )
+        if len(
+            parts,
+        ) == 2:
+            label = f"{parts[0]}-{parts[1]}"
+        else:
+            label = interval_str
+
+        df_temp = pd.read_csv(
+            file_path,
+        )
+
+        # 2. Filter numeric columns and remove GEE system columns
+        num_cols = df_temp.select_dtypes(
+            include=[
+                'number',
+            ],
+        ).columns
+        num_cols = [
+            c for c in num_cols
+            if 'system' not in c
+        ]
+
+        if num_cols:
+            # The histogram dictionary values are flattened into these columns
+            row_data = df_temp[
+                num_cols
+            ].sum()
+            records[
+                label
+            ] = row_data
+
+    if not records:
+        print(
+            "No valid data found in CSVs.",
+        )
+        return
+
+    # 3. Build a consolidated DataFrame
+    df = pd.DataFrame.from_dict(
+        records,
+        orient='index',
+    )
+    df.fillna(
+        0,
+        inplace=True,
+    )
+
+    # 4. Fix column names (GEE often exports numeric keys as floats like "1.0")
+    new_cols = {}
+    for c in df.columns:
+        try:
+            int_c = int(
+                float(
+                    c,
+                ),
+            )
+            new_cols[
+                c
+            ] = str(
+                int_c,
+            )
+        except ValueError:
+            new_cols[
+                c
+            ] = str(
+                c,
+            )
+
+    df.rename(
+        columns=new_cols,
+        inplace=True,
+    )
+
+    # 5. Sort columns numerically
+    sorted_cols = sorted(
+        df.columns,
+        key=lambda x: int(x) if x.isdigit() else float('inf')
+    )
+    df = df[
+        sorted_cols
+    ]
+
+    # 6. Sort index chronologically
+    df.sort_index(
+        inplace=True,
+    )
+
+    # 7. Determine Unit Scaling
+    max_val = df.sum(
+        axis=1,
+    ).max()
+
+    if max_val >= 1_000_000_000_000:
+        factor = 1_000_000_000_000.0
+        suffix = " (trillion pixels)"
+    elif max_val >= 1_000_000_000:
+        factor = 1_000_000_000.0
+        suffix = " (billion pixels)"
+    elif max_val >= 1_000_000:
+        factor = 1_000_000.0
+        suffix = " (million pixels)"
+    elif max_val >= 1_000:
+        factor = 1_000.0
+        suffix = " (thousand pixels)"
+    else:
+        factor = 1.0
+        suffix = ""
+
+    df_scaled = df / factor
+
+    # 8. Setup Figure and Colors
+    fig, ax = plt.subplots(
+        figsize=(
+            14,
+            6,
+        ),
+    )
+
+    n_cols = len(
+        df.columns,
+    )
+
+    cmap = plt.cm.viridis_r
+
+    if n_cols > 1:
+        colors = [
+            cmap(
+                i / (
+                    n_cols - 1
+                ),
+            )
+            for i in range(
+                n_cols,
+            )
+        ]
+    else:
+        colors = [
+            cmap(
+                0.5,
+            ),
+        ]
+
+    # 9. Plot Stacked Bars
+    bottom = pd.Series(
+        0.0,
+        index=df_scaled.index,
+    )
+
+    for i, col in reversed(
+        list(
+            enumerate(
+                df.columns,
+            )
+        )
+    ):
+        vals = df_scaled[
+            col
+        ]
+
+        if vals.sum() == 0:
+            label_txt = "_nolegend_"
+        else:
+            label_txt = f"{col}"
+
+        ax.bar(
+            df_scaled.index,
+            vals,
+            bottom=bottom,
+            label=label_txt,
+            color=colors[
+                i
+            ],
+            edgecolor="none",
+            linewidth=0.5,
+            width=0.9,
+        )
+        bottom += vals
+
+    # 10. Formatting Axes and Labels
+    y_label_text = f"Change{suffix}"
+
+    ax.set_ylabel(
+        y_label_text,
+        fontsize=18,
+    )
+
+    ax.yaxis.set_major_locator(
+        ticker.MaxNLocator(
+            nbins=5,
+            integer=True,
+        ),
+    )
+
+    ax.set_title(
+        "Number of Changes during Time Intervals",
+        fontsize=20,
+        pad=15,
+    )
+
+    # 11. X-Axis labels
+    labels = ax.get_xticklabels()
+    n_labels = len(
+        labels,
+    )
+
+    if n_labels <= 6:
+        rotation = 0
+        ha = "center"
+    elif n_labels <= 12:
+        rotation = 45
+        ha = "right"
+    else:
+        rotation = 90
+        ha = "center"
+
+    plt.setp(
+        labels,
+        rotation=rotation,
+        ha=ha,
+        fontsize=18,
+    )
+
+    ax.tick_params(
+        axis="y",
+        rotation=0,
+        labelsize=18,
+    )
+
+    # 12. Legend
+    handles, labels = ax.get_legend_handles_labels()
+
+    leg = ax.legend(
+        handles[::-1],
+        labels[::-1],
+        title="Changes",
+        title_fontsize=16,
+        bbox_to_anchor=(
+            1.02,
+            0.5,
+        ),
+        loc="center left",
+        frameon=False,
+        fontsize=16,
+    )
+
+    for patch in leg.get_patches():
+        patch.set_linewidth(
+            0,
+        )
+
+    plt.tight_layout()
+
+    # 13. Save Figure
+    charts_dir = os.path.join(
+        output_dir,
+        "charts",
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True,
+    )
+
+    output_fig = os.path.join(
+        charts_dir,
+        "chart_number_change_time_interval.png",
+    )
+
+    plt.savefig(
+        output_fig,
+        dpi=300,
+        bbox_inches="tight",
+    )
+
+    plt.show()
+
+    print(
+        f"Chart saved to: {output_fig}",
+    )
+
+# 14. Execute the function reading directly from the Drive folder
+# Note: Wait until the GEE tasks finish exporting to run this part!
+print("Generating the chart from GEE CSVs...")
+plot_global_change_frequency_bar_chart(
+    input_dir=base_drive_dir,
+    output_dir=base_drive_dir,
+)
+
+###############################################################################
+#                                                                             #
 #                  5. TRANSITION MATRIX                                       #
 #                                                                             #
 ###############################################################################
