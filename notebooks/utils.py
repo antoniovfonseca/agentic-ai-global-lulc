@@ -1714,14 +1714,20 @@ def plot_number_of_changes_map(
     # Otherwise, use the pixel size in meters.
     degree_in_meters = 111320.0
     dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
-    
+
+    # Custom formatter to prevent 'Mm' (Megameters) and force 'km'
+    def km_formatter(value, unit):
+        if unit == "Mm":
+            return f"{int(value * 1000)} km"
+        return f"{int(value)} {unit}"
+
     scalebar = ScaleBar(
         dx=dx_meters,
         units="m",
         length_fraction=0.15,
         location="lower left",
         box_alpha=0.6,
-        scale_formatter=lambda value, unit: f"{int(value)} {unit}"
+        scale_formatter=km_formatter
     )
     ax.add_artist(scalebar)
 
