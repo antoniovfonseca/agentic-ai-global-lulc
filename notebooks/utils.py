@@ -729,15 +729,6 @@ def export_global_change_frequency_tasks(
 
     return tasks_list
 
-# 12. Trigger the tasks for the Number of Changes section
-print("\nSubmitting Number of Changes Tasks to GEE...")
-change_freq_tasks = export_global_change_frequency_tasks(
-    year_list=years_to_process,
-    drive_folder=gee_drive_folder,
-    scale=300,
-)
-print(f"\nSuccess! {len(change_freq_tasks)} tasks submitted to GEE.")
-
 import os
 import glob
 import pandas as pd
