@@ -1710,8 +1710,11 @@ def plot_number_of_changes_map(
     )
 
     # 9. Cartographic elements
+    degree_in_km = 111.32
+    dx_km = degree_in_km if ax.get_xlim()[1] <= 180.5 else pixel_size_km
+    
     scalebar = ScaleBar(
-        dx=pixel_size_km,
+        dx=dx_km,
         units="km",
         length_fraction=0.15,
         location="lower left",
