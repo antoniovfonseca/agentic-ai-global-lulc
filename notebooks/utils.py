@@ -1427,8 +1427,8 @@ def export_global_number_of_changes_raster_task(
     ee.batch.Task
         The submitted Earth Engine task.
     """
-    # Load GLanCE image collection
-    collection = ee.ImageCollection("projects/bu-glance/assets/global-landcover-2022/v1")
+    # Load GLanCE image collection using the existing global constant
+    collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
 
     # Generate sequential year pairs (e.g., 2001-2002, 2002-2003...)
     pairs = []
@@ -1440,8 +1440,8 @@ def export_global_number_of_changes_raster_task(
 
     for y1, y2 in pairs:
         # Get the LC maps for the current year pair and mosaic them to global extent
-        img1 = collection.filter(ee.Filter.eq("year", y1)).mosaic()
-        img2 = collection.filter(ee.Filter.eq("year", y2)).mosaic()
+        img1 = collection.filter(ee.Filter.eq("year", y1)).select(GLANCE_CLASS_BAND).mosaic()
+        img2 = collection.filter(ee.Filter.eq("year", y2)).select(GLANCE_CLASS_BAND).mosaic()
         
         # Identify pixels where the class changed (img1 != img2)
         has_changed = img1.neq(img2)
@@ -1453,11 +1453,10 @@ def export_global_number_of_changes_raster_task(
     world_geometry = ee.Geometry.BBox(-180, -90, 180, 90)
 
     # Mask the change_count_img using the extent of the original dataset to exclude oceans/voids
-    valid_mask = collection.filter(ee.Filter.eq("year", year_list[0])).mosaic().mask()
+    valid_mask = collection.filter(ee.Filter.eq("year", year_list[0])).select(GLANCE_CLASS_BAND).mosaic().mask()
     masked_change_count = change_count_img.updateMask(valid_mask)
 
-    # Unmask void/nodata pixels to 255 before export to differentiate from 0 (no change)
-    NODATA_VALUE = 255
+    # Unmask void/nodata pixels to NODATA_VALUE before export to differentiate from 0 (no change)
     final_export_image = masked_change_count.unmask(NODATA_VALUE).toByte()
 
     start_year = year_list[0]
