@@ -1402,6 +1402,118 @@ def plot_number_of_changes_distribution(
         f"Chart saved to: {out_fig_path}",
     )
 
+import ee
+
+def export_global_number_of_changes_raster_task(
+    year_list: list[int],
+    drive_folder: str,
+    scale: int = 300,
+) -> ee.batch.Task:
+    """
+    Compute and save a raster representing the total number of class changes per pixel
+    using Google Earth Engine, and export it to Google Drive.
+
+    Parameters
+    ----------
+    year_list : list[int]
+        List of years for indexing the GLanCE collection.
+    drive_folder : str
+        Directory to save the output raster in Drive.
+    scale : int, optional
+        Spatial resolution in meters. Defaults to 300.
+
+    Returns
+    -------
+    ee.batch.Task
+        The triggered Earth Engine Task object.
+    """
+    # 1. Define global bounding box geometry
+    global_geom = ee.Geometry.Rectangle(
+        [
+            -180,
+            -90,
+            180,
+            90,
+        ],
+        'EPSG:4326',
+        False,
+    )
+
+    # 2. Extract images for all years
+    images = []
+    for year in year_list:
+        img = ee.ImageCollection(
+            utils.GLANCE_COLLECTION_ID,
+        ).filterDate(
+            f"{year}-01-01",
+            f"{year}-12-31",
+        ).mosaic().select(
+            utils.GLANCE_CLASS_BAND,
+        )
+        images.append(
+            img,
+        )
+
+    # 3. Compute change images per interval
+    change_images = []
+    n_intervals = len(
+        year_list,
+    ) - 1
+
+    for i in range(
+        n_intervals,
+    ):
+        img_curr = images[
+            i
+        ]
+        img_next = images[
+            i + 1
+        ]
+
+        # Binary change mapping (1 if changed, 0 otherwise)
+        change = img_curr.neq(
+            img_next,
+        )
+        change_images.append(
+            change,
+        )
+
+    # 4. Compute total changes over the entire time series
+    # Summing all boolean change images and converting to byte to save space
+    total_changes = ee.ImageCollection(
+        change_images,
+    ).sum().rename(
+        "number_of_changes",
+    ).toByte()
+
+    # 5. Define the export task parameters
+    start_year = year_list[
+        0
+    ]
+    end_year = year_list[
+        -1
+    ]
+    export_name = f"Number_of_Changes_Raster_{start_year}_{end_year}"
+
+    task = ee.batch.Export.image.toDrive(
+        image=total_changes,
+        description=export_name,
+        folder=drive_folder,
+        scale=scale,
+        region=global_geom,
+        maxPixels=1e13,
+        fileFormat="GeoTIFF",
+    )
+
+    # 6. Start the task
+    task.start()
+    print(
+        f"Task started: {export_name} (Scale: {scale}m)",
+    )
+
+    return task
+
+
 ###############################################################################
 #                                                                             #
 #                  5. TRANSITION MATRIX                                       #
