@@ -1430,21 +1430,24 @@ def export_global_number_of_changes_raster_task(
     # Load GLanCE image collection using the existing global constant
     collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
 
-    # Generate sequential year pairs (e.g., 2001-2002, 2002-2003...)
+    # Generate sequential year pairs (e.g., 2001-2010, 2010-2019...)
     pairs = []
     for i in range(len(year_list) - 1):
         pairs.append((year_list[i], year_list[i + 1]))
 
-    # Initialize an empty image to accumulate changes (starting at 0)
-    change_count_img = ee.Image(0).toInt32()
+    # Initialize an empty image to accumulate changes (starting at 0) with the correct band name
+    change_count_img = ee.Image(0).toInt32().rename(GLANCE_CLASS_BAND)
 
     for y1, y2 in pairs:
-        # Get the LC maps for the current year pair and mosaic them to global extent
-        img1 = collection.filter(ee.Filter.eq("year", y1)).select(GLANCE_CLASS_BAND).mosaic()
-        img2 = collection.filter(ee.Filter.eq("year", y2)).select(GLANCE_CLASS_BAND).mosaic()
+        # Robust date filtering using calendarRange (works on system:time_start)
+        img1 = collection.filter(ee.Filter.calendarRange(y1, y1, 'year')) \
+                         .select(GLANCE_CLASS_BAND).mosaic()
+        
+        img2 = collection.filter(ee.Filter.calendarRange(y2, y2, 'year')) \
+                         .select(GLANCE_CLASS_BAND).mosaic()
         
         # Identify pixels where the class changed (img1 != img2)
-        has_changed = img1.neq(img2)
+        has_changed = img1.neq(img2).rename(GLANCE_CLASS_BAND)
         
         # Accumulate the changes
         change_count_img = change_count_img.add(has_changed)
@@ -1453,7 +1456,9 @@ def export_global_number_of_changes_raster_task(
     world_geometry = ee.Geometry.BBox(-180, -90, 180, 90)
 
     # Mask the change_count_img using the extent of the original dataset to exclude oceans/voids
-    valid_mask = collection.filter(ee.Filter.eq("year", year_list[0])).select(GLANCE_CLASS_BAND).mosaic().mask()
+    valid_mask = collection.filter(ee.Filter.calendarRange(year_list[0], year_list[0], 'year')) \
+                           .select(GLANCE_CLASS_BAND).mosaic().mask()
+                           
     masked_change_count = change_count_img.updateMask(valid_mask)
 
     # Unmask void/nodata pixels to NODATA_VALUE before export to differentiate from 0 (no change)
