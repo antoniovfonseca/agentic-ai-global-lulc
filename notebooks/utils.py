@@ -1680,21 +1680,19 @@ def plot_number_of_changes_map(
     )
 
     # 4. Read the raster and basic metadata with downsampling
-    with rasterio.open(
-        vrt_path,
-    ) as src:
-        data = src.read(
-            1,
-            out_shape=(
-                int(
-                    src.height * scale_factor,
-                ),
-                int(
-                    src.width * scale_factor,
-                ),
-            ),
-            resampling=rasterio.enums.Resampling.nearest,
-        )
+    with rasterio.open(vrt_path) as src:
+        bounds = src.bounds
+        width_pixels = src.width
+        lon_l = bounds.left
+        lon_r = bounds.right
+        lat_mid = (bounds.bottom + bounds.top) / 2.0
+
+    pixel_size_km = compute_display_pixel_size_km(
+        lon_l=lon_l,
+        lon_r=lon_r,
+        lat_mid=lat_mid,
+        width_pixels=width_pixels,
+    )
 
         # Force masking using the provided NoData value
         data = np.ma.masked_equal(
