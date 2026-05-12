@@ -1429,12 +1429,7 @@ def export_global_number_of_changes_raster_task(
     """
     # 1. Define global bounding box geometry
     global_geom = ee.Geometry.Rectangle(
-        [
-            -180,
-            -90,
-            180,
-            90,
-        ],
+        [-180, -90, 180, 90],
         'EPSG:4326',
         False,
     )
@@ -1443,43 +1438,28 @@ def export_global_number_of_changes_raster_task(
     images = []
     for year in year_list:
         img = ee.ImageCollection(
-            utils.GLANCE_COLLECTION_ID,
+            GLANCE_COLLECTION_ID,
         ).filterDate(
             f"{year}-01-01",
             f"{year}-12-31",
         ).mosaic().select(
-            utils.GLANCE_CLASS_BAND,
+            GLANCE_CLASS_BAND,
         )
-        images.append(
-            img,
-        )
+        images.append(img)
 
     # 3. Compute change images per interval
     change_images = []
-    n_intervals = len(
-        year_list,
-    ) - 1
+    n_intervals = len(year_list) - 1
 
-    for i in range(
-        n_intervals,
-    ):
-        img_curr = images[
-            i
-        ]
-        img_next = images[
-            i + 1
-        ]
+    for i in range(n_intervals):
+        img_curr = images[i]
+        img_next = images[i + 1]
 
         # Binary change mapping (1 if changed, 0 otherwise)
-        change = img_curr.neq(
-            img_next,
-        )
-        change_images.append(
-            change,
-        )
+        change = img_curr.neq(img_next)
+        change_images.append(change)
 
     # 4. Compute total changes over the entire time series
-    # Summing all boolean change images and converting to byte to save space
     total_changes = ee.ImageCollection(
         change_images,
     ).sum().rename(
@@ -1487,12 +1467,8 @@ def export_global_number_of_changes_raster_task(
     ).toByte()
 
     # 5. Define the export task parameters
-    start_year = year_list[
-        0
-    ]
-    end_year = year_list[
-        -1
-    ]
+    start_year = year_list[0]
+    end_year = year_list[-1]
     export_name = f"Number_of_Changes_Raster_{start_year}_{end_year}"
 
     task = ee.batch.Export.image.toDrive(
@@ -1507,9 +1483,7 @@ def export_global_number_of_changes_raster_task(
 
     # 6. Start the task
     task.start()
-    print(
-        f"Task started: {export_name} (Scale: {scale}m)",
-    )
+    print(f"Task started: {export_name} (Scale: {scale}m)")
 
     return task
 
