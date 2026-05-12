@@ -617,7 +617,7 @@ def export_global_change_frequency_tasks(
     images = []
     for year in year_list:
         img = ee.ImageCollection(
-            utils.GLANCE_COLLECTION_ID,
+            GLANCE_COLLECTION_ID,
         ).filterDate(
             f"{year}-01-01",
             f"{year}-12-31",
