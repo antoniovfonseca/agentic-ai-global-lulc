@@ -1418,73 +1418,67 @@ def export_global_number_of_changes_raster_task(
     year_list : list[int]
         List of years for indexing the GLanCE collection.
     drive_folder : str
-        Directory to save the output raster in Drive.
+        Directory in Google Drive to save the raster.
     scale : int, optional
-        Spatial resolution in meters. Defaults to 300.
+        Spatial resolution for the export in meters, by default 300.
 
     Returns
     -------
     ee.batch.Task
-        The triggered Earth Engine Task object.
+        The submitted Earth Engine task.
     """
-    # 1. Define global bounding box geometry
-    global_geom = ee.Geometry.Rectangle(
-        [-180, -90, 180, 90],
-        'EPSG:4326',
-        False,
-    )
+    # Load GLanCE image collection
+    collection = ee.ImageCollection("projects/bu-glance/assets/global-landcover-2022/v1")
 
-    # 2. Extract images for all years
-    images = []
-    for year in year_list:
-        img = ee.ImageCollection(
-            GLANCE_COLLECTION_ID,
-        ).filterDate(
-            f"{year}-01-01",
-            f"{year}-12-31",
-        ).mosaic().select(
-            GLANCE_CLASS_BAND,
-        )
-        images.append(img)
+    # Generate sequential year pairs (e.g., 2001-2002, 2002-2003...)
+    pairs = []
+    for i in range(len(year_list) - 1):
+        pairs.append((year_list[i], year_list[i + 1]))
 
-    # 3. Compute change images per interval
-    change_images = []
-    n_intervals = len(year_list) - 1
+    # Initialize an empty image to accumulate changes (starting at 0)
+    change_count_img = ee.Image(0).toInt32()
 
-    for i in range(n_intervals):
-        img_curr = images[i]
-        img_next = images[i + 1]
+    for y1, y2 in pairs:
+        # Get the LC maps for the current year pair and mosaic them to global extent
+        img1 = collection.filter(ee.Filter.eq("year", y1)).mosaic()
+        img2 = collection.filter(ee.Filter.eq("year", y2)).mosaic()
+        
+        # Identify pixels where the class changed (img1 != img2)
+        has_changed = img1.neq(img2)
+        
+        # Accumulate the changes
+        change_count_img = change_count_img.add(has_changed)
 
-        # Binary change mapping (1 if changed, 0 otherwise)
-        change = img_curr.neq(img_next)
-        change_images.append(change)
+    # Retrieve global boundaries
+    world_geometry = ee.Geometry.BBox(-180, -90, 180, 90)
 
-    # 4. Compute total changes over the entire time series
-    total_changes = ee.ImageCollection(
-        change_images,
-    ).sum().rename(
-        "number_of_changes",
-    ).toByte()
+    # Mask the change_count_img using the extent of the original dataset to exclude oceans/voids
+    valid_mask = collection.filter(ee.Filter.eq("year", year_list[0])).mosaic().mask()
+    masked_change_count = change_count_img.updateMask(valid_mask)
 
-    # 5. Define the export task parameters
+    # Unmask void/nodata pixels to 255 before export to differentiate from 0 (no change)
+    NODATA_VALUE = 255
+    final_export_image = masked_change_count.unmask(NODATA_VALUE).toByte()
+
     start_year = year_list[0]
     end_year = year_list[-1]
-    export_name = f"Number_of_Changes_Raster_{start_year}_{end_year}"
+    task_name = f"Number_of_Changes_Raster_{start_year}_{end_year}"
 
+    # Create and submit the export task
     task = ee.batch.Export.image.toDrive(
-        image=total_changes,
-        description=export_name,
+        image=final_export_image,
+        description=task_name,
         folder=drive_folder,
+        fileNamePrefix=task_name,
+        region=world_geometry,
         scale=scale,
-        region=global_geom,
         maxPixels=1e13,
-        fileFormat="GeoTIFF",
+        crs="EPSG:4326",
+        fileFormat="GeoTIFF"
     )
-
-    # 6. Start the task
     task.start()
-    print(f"Task started: {export_name} (Scale: {scale}m)")
-
+    
+    print(f"Task started: {task_name} (Scale: {scale}m, NoData: {NODATA_VALUE})")
     return task
 
 import os
