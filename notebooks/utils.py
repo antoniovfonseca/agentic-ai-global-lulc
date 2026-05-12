@@ -1065,14 +1065,6 @@ def plot_global_change_frequency_bar_chart(
         f"Chart saved to: {output_fig}",
     )
 
-# 14. Execute the function reading directly from the Drive folder
-# Note: Wait until the GEE tasks finish exporting to run this part!
-print("Generating the chart from GEE CSVs...")
-plot_global_change_frequency_bar_chart(
-    input_dir=base_drive_dir,
-    output_dir=base_drive_dir,
-)
-
 ###############################################################################
 #                                                                             #
 #                  5. TRANSITION MATRIX                                       #
