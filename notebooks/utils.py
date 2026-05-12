@@ -2661,13 +2661,26 @@ def _unit_label(
     str
         The formatted unit label.
     """
-    mapping = {
-        "": base_label,
-        "k": "thousand pixels",
-        "M": "million pixels",
-        "B": "billion pixels",
-        "T": "trillions pixels",
-    }
+    # Extract the unit from the parentheses, if any. E.g., 'Area (km²)' -> '(km²)'
+    unit = f"({base_label.split('(')[-1]}" if '(' in base_label else f"of {base_label}"
+
+    if "pixels" in base_label.lower():
+        mapping = {
+            "": base_label,
+            "k": "thousand pixels",
+            "M": "million pixels",
+            "B": "billion pixels",
+            "T": "trillions pixels",
+        }
+    else:
+        mapping = {
+            "": base_label,
+            "k": f"Thousands {unit}",
+            "M": f"Millions {unit}",
+            "B": f"Billions {unit}",
+            "T": f"Trillions {unit}",
+        }
+
     return mapping.get(
         suffix,
         f"{base_label} ({suffix})",
