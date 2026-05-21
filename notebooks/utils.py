@@ -1789,98 +1789,330 @@ def plot_number_of_changes_map(
 #                  5. TRAJECTORY ANALYSIS                                     #
 #                                                                             #
 ###############################################################################
+def plot_trajectory_contributions(
+    df: pd.DataFrame,
+    output_path: str,
+) -> None:
+    """
+    Create stacked bar chart for trajectory contributions per interval.
 
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with intervals as index and trajectory IDs (2, 3, 4, 5) as columns.
+    output_path : str
+        Path to output directory for saving figure.
+    """
+    # 0. Ensure columns are integers to match logic
+    df = df.copy()
+    df.columns = df.columns.astype(int)
+
+    # 1. Calculate the maximum value to determine scale factor
+    max_val = df.sum(axis=1).max()
+
+    if max_val >= 1_000_000_000_000:
+        scale_factor = 1_000_000_000_000
+        y_label = "Change (trillion pixels)"
+    elif max_val >= 1_000_000_000:
+        scale_factor = 1_000_000_000
+        y_label = "Change (billion pixels)"
+    elif max_val >= 1_000_000:
+        scale_factor = 1_000_000
+        y_label = "Change (million pixels)"
+    elif max_val >= 1_000:
+        scale_factor = 1_000
+        y_label = "Change (thousand pixels)"
+    else:
+        scale_factor = 1
+        y_label = "Change (pixels)"
+
+    # Apply scaling
+    df_scaled = df / scale_factor
+
+    # 2. Define colors and stacking order
+    colors = {
+        2: "#990033",
+        3: "#FDE725",
+        4: "#ff9900",
+        5: "#000066"
+    }
+
+    # Stacking order: 5 (bottom), 4, 3, 2 (top)
+    stack_order = [5, 4, 3, 2]
+
+    # 3. Create figure and axis
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # 4. Plot stacked bars
+    bottom = pd.Series(0.0, index=df_scaled.index)
+
+    for traj_id in stack_order:
+        if traj_id in df_scaled.columns:
+            values = df_scaled[traj_id]
+            ax.bar(
+                df_scaled.index,
+                values,
+                label=f"{traj_id}",
+                bottom=bottom,
+                color=colors[traj_id],
+                edgecolor="none",
+                width=0.9,
+            )
+            bottom += values
+
+    # 5. Customize axes and labels
+    ax.set_ylabel(y_label, fontsize=18)
+    ax.set_title("Trajectories during Time Intervals", fontsize=20, pad=15)
+
+    # X-Axis formatting: Horizontal labels
+    ax.tick_params(axis="x", labelsize=18, rotation=90)
+
+    # Y-Axis formatting (mticker)
+    ax.tick_params(axis="y", labelsize=18)
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=5))
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
+
+    # Spines visible, NO GRID
+    for spine in ["top", "right", "left", "bottom"]:
+        ax.spines[spine].set_visible(True)
+
+    # 6. Legend
+    handles, labels = ax.get_legend_handles_labels()
+
+    if handles:
+        # Reorder handles to match 2, 3, 4, 5
+        legend_order_map = {"2": 0, "3": 1, "4": 2, "5": 3}
+
+        # Sort handles based on labels
+        sorted_pairs = sorted(
+            zip(handles, labels),
+            key=lambda x: legend_order_map.get(x[1], 99),
+        )
+        sorted_handles, sorted_labels = zip(*sorted_pairs)
+
+        ax.legend(
+            sorted_handles,
+            sorted_labels,
+            loc="center left",
+            bbox_to_anchor=(1.01, 0.5),
+            title="Trajectory",
+            title_fontsize=14,
+            alignment="left",
+            fontsize=14,
+            frameon=False,
+        )
+
+    plt.tight_layout()
+
+    # 7. Save figure
+    charts_dir = os.path.join(output_path, "charts")
+    os.makedirs(charts_dir, exist_ok=True)
+
+    output_fig = os.path.join(charts_dir, "graphic_trajectory_time_interval.png")
+    plt.savefig(output_fig, dpi=300, bbox_inches="tight", format="png")
+    plt.show()
+
+    print(f"Figure saved to: {output_fig}")
 
 ###############################################################################
 #                                                                             #
 #                  5. TRANSITION MATRIX                                       #
 #                                                                             #
 ###############################################################################
-def calculate_global_transition_matrix(year_list, scale=300):
+def calculate_trajectory_gee(
+    image_stack: ee.Image,
+    band_names: list,
+) -> ee.Image:
     """
-    Calculates global transition matrices for all consecutive years in a list,
-    plus the long-term transition between the first and last years.
-
-    This function performs the calculation entirely on the Earth Engine 
-    servers. It creates transition images where values represent pairs 
-    of classes (e.g., class 5 to 1 becomes 501) using a 100x multiplier.
+    Classify a single pixel trajectory into five categories based on mathematical logic using GEE.
 
     Parameters
     ----------
-    year_list : list of int
-        List of years to process (e.g., [2001, 2010, 2019]).
-    scale : int, optional
-        The pixel scale in meters for the global reduction. 
-        Note: scale=30 is native but may time out with getInfo(). 
-        Defaults to 1000.
+    image_stack : ee.Image
+        An ee.Image where each band represents a chronological time step.
+    band_names : list
+        A list of strings representing the ordered band names in the stack.
 
     Returns
     -------
-    dict of pd.DataFrame
-        A dictionary where keys are strings "YYYY_YYYY" and values are 
-        pivot tables representing the transition matrix with class names.
+    ee.Image
+        An ee.Image containing the classified trajectory codes (1 to 5).
     """
-    # 1. Initialize core Earth Engine components
-    collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
-    global_geom = ee.Geometry.Rectangle([-180, -90, 180, 90], 'EPSG:4326', False)
-    class_names = {k: v['name'] for k, v in GLANCE_METADATA.items()}
-    
-    # 2. Define transition pairs (consecutive intervals)
-    pairs = [(year_list[i], year_list[i+1]) for i in range(len(year_list) - 1)]
-    
-    # 3. Add long-term transition (First Year to Last Year)
-    if len(year_list) > 2:
-        pairs.append((year_list[0], year_list[-1]))
-    
-    all_results = {}
+    # 1. Extract the start and end images from the stack
+    start_img = image_stack.select(band_names[0])
+    end_img = image_stack.select(band_names[-1])
 
-    # 4. Iterate through each year pair for processing
-    for y1, y2 in pairs:
-        label = f"{y1}_{y2}"
-        
-        # 5. Filter images and create mosaics for the pair
-        img_start = collection.filterDate(f"{y1}-01-01", f"{y1}-12-31") \
-                              .mosaic() \
-                              .select(GLANCE_CLASS_BAND)
-                              
-        img_end = collection.filterDate(f"{y2}-01-01", f"{y2}-12-31") \
-                            .mosaic() \
-                            .select(GLANCE_CLASS_BAND)
+    # 2. Check if the start class equals the end class
+    start_equals_end = start_img.eq(end_img)
 
-        # 6. Compute transitions: (StartYear * 100) + EndYear
-        transition_image = img_start.multiply(100).add(img_end)
+    # 3. Verify if all intermediate values match the start value
+    all_match_start = image_stack.eq(start_img).reduce(ee.Reducer.min())
 
-        # 7. Perform global reduction to get frequency histogram
-        stats = transition_image.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
-            geometry=global_geom,
-            scale=scale,
-            maxPixels=1e13
-        ).get(GLANCE_CLASS_BAND).getInfo()
+    # 4. Assign Trajectory 1 for completely stable pixels
+    traj_1 = start_equals_end.And(all_match_start).multiply(1)
 
-        # 8. Process histogram data into list of records
-        records = []
-        for code, count in stats.items():
-            code_int = int(float(code))
-            id_from = code_int // 100
-            id_to = code_int % 100
-            
-            if id_from in class_names and id_to in class_names:
-                records.append({
-                    "From": class_names[id_from],
-                    "To": class_names[id_to],
-                    "Pixels": int(count)
-                })
+    # 5. Assign Trajectory 2 for stable extent with alternation
+    traj_2 = start_equals_end.And(all_match_start.Not()).multiply(2)
 
-        # 9. Convert records to DataFrame and pivot into Matrix
-        if records:
-            df_temp = pd.DataFrame(records)
-            matrix = df_temp.pivot(index="From", columns="To", values="Pixels").fillna(0)
-            all_results[label] = matrix
-        
-        print(f"Successfully computed: {label}")
+    # 6. Identify pixels with extent change
+    extent_change = start_equals_end.Not()
 
-    return all_results
+    # 7. Initialize images to track direct transitions and path changes
+    has_direct_transition = ee.Image(0)
+    path_changes = ee.Image(0)
+
+    length = len(band_names)
+
+    # 8. Iterate over the time steps to evaluate transitions
+    for i in range(length - 1):
+        current_band = image_stack.select(band_names[i])
+        next_band = image_stack.select(band_names[i + 1])
+
+        # 9. Check for a direct transition from start to end class
+        is_direct = current_band.eq(start_img).And(next_band.eq(end_img))
+        has_direct_transition = has_direct_transition.Or(is_direct)
+
+        # 10. Increment path changes when the class changes between steps
+        is_change = current_band.neq(next_band)
+        path_changes = path_changes.add(is_change)
+
+    # 11. Assign Trajectory 5 for extent change without direct transition
+    traj_5 = extent_change.And(has_direct_transition.Not()).multiply(5)
+
+    # 12. Assign Trajectory 3 for extent change without alternation
+    traj_3 = extent_change.And(has_direct_transition).And(path_changes.eq(1)).multiply(3)
+
+    # 13. Assign Trajectory 4 for extent change with alternation
+    traj_4 = extent_change.And(has_direct_transition).And(path_changes.gt(1)).multiply(4)
+
+    # 14. Combine all trajectory maps into a single output image
+    trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
+
+    return trajectory_image.rename('trajectory')
+
+
+def build_glance_stack(
+    year_list: list,
+    collection_id: str,
+    band_name: str,
+    nodata_val: int,
+) -> tuple:
+    """
+    Build an Earth Engine image stack from the specified collection,
+    masking out NoData values.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years to process.
+    collection_id : str
+        The GEE ImageCollection ID.
+    band_name : str
+        The band name to select.
+    nodata_val : int
+        The NoData value to mask out.
+
+    Returns
+    -------
+    tuple
+        A tuple containing the ee.Image stack and the list of band names.
+    """
+    # 1. Initialize lists for image bands and names
+    images = []
+    b_names = []
+
+    # 2. Loop through the requested years
+    for year in year_list:
+        b_name = f"y{year}"
+        b_names.append(b_name)
+
+        # 3. Retrieve the image for the specific year
+        img = ee.ImageCollection(collection_id).filter(
+            ee.Filter.calendarRange(year, year, 'year')
+        ).select(band_name).mosaic()
+
+        # 4. Mask out the NoData value
+        img = img.updateMask(img.neq(nodata_val)).rename(b_name)
+
+        images.append(img)
+
+    # 5. Combine into a single multi-band image
+    stack = ee.Image(images)
+
+    return stack, b_names
+
+
+def export_trajectory_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int,
+    collection_id: str,
+    band_name: str,
+    nodata_val: int,
+) -> ee.batch.Task:
+    """
+    Generate the trajectory raster and submit an export task to Google Earth Engine.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years to process.
+    drive_folder : str
+        The destination folder in Google Drive.
+    scale : int
+        The spatial resolution for the export in meters.
+    collection_id : str
+        The GEE ImageCollection ID.
+    band_name : str
+        The band name to select.
+    nodata_val : int
+        The NoData value to mask out.
+
+    Returns
+    -------
+    ee.batch.Task
+        The submitted Earth Engine task object.
+    """
+    # 1. Build the image stack
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
+
+    # 2. Generate the trajectory classification image
+    trajectory_image = calculate_trajectory_gee(
+        image_stack,
+        band_names,
+    )
+
+    # 3. Apply NoData unmasking to match the project's standard
+    trajectory_image = trajectory_image.unmask(nodata_val).toUint8()
+
+    # 4. Define a global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None,
+        False,
+    )
+
+    # 5. Define the Earth Engine export task
+    task_desc = f"Trajectory_Analysis_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.image.toDrive(
+        image=trajectory_image,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=global_region,
+        maxPixels=1e13,
+    )
+
+    # 6. Start the export task
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
+
+    return task
 
 ###############################################################################
 #                                                                             #
