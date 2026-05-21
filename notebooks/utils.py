@@ -2346,6 +2346,123 @@ def plot_trajectory_contributions(
 
     print(f"Figure saved to: {output_fig}")
 
+def plot_trajectory_distribution(
+    output_path: str,
+    raster_prefix: str = "Trajectory_Analysis",
+) -> None:
+    """
+    Generate and save a stacked bar chart of trajectory class distributions.
+
+    Reads multiple tiled rasters using a Virtual Raster (VRT) and processes
+    them in chunks to avoid memory issues, calculating percentages.
+
+    Parameters
+    ----------
+    output_path : str
+        Directory path containing the input rasters and for output charts.
+    raster_prefix : str, optional
+        Prefix of the raster files to be merged into VRT. Default is
+        "Trajectory_Analysis".
+
+    Returns
+    -------
+    None
+        The function saves the plot to disk and displays it.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no TIFF files matching the prefix are found.
+    """
+    # 1. Build Virtual Raster (VRT) from GEE tiles
+    tif_pattern = os.path.join(output_path, f"{raster_prefix}*.tif")
+    tif_files = glob.glob(tif_pattern)
+
+    if not tif_files:
+        raise FileNotFoundError(f"No TIFF files found matching {tif_pattern}")
+
+    vrt_path = os.path.join(output_path, "merged_trajectory.vrt")
+
+    print(f"Building VRT from {len(tif_files)} tiles...")
+    vrt_cmd = ["gdalbuildvrt", vrt_path] + tif_files
+    subprocess.run(vrt_cmd, check=True)
+    print(f"VRT created successfully at: {vrt_path}")
+
+    # 2. Process Raster Data in chunks (block by block)
+    data_counts = {}
+    print("Processing raster data (this may take a few minutes for global scale)...")
+    with rasterio.open(vrt_path) as src:
+        nodata = src.nodata
+        for ji, window in src.block_windows(1):
+            traj_data = src.read(1, window=window)
+            valid_data = traj_data[traj_data != nodata]
+            if valid_data.size > 0:
+                unique_vals, counts = np.unique(valid_data, return_counts=True)
+                for val, count in zip(unique_vals, counts):
+                    data_counts[val] = data_counts.get(val, 0) + count
+
+    total_pixels = sum(data_counts.values())
+
+    # Calculate percentages for classes 2, 3, 4, and 5
+    percentages = {
+        i: float((data_counts.get(i, 0) / total_pixels) * 100.0) if total_pixels > 0 else 0.0
+        for i in [2, 3, 4, 5]
+    }
+
+    ordered_trajs = [5, 4, 3, 2]
+    colors = {5: "#000066", 4: "#ff9900", 3: "#FDE724", 2: "#990033"}
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    bottom = 0.0
+    for traj in ordered_trajs:
+        val = percentages[traj]
+        ax.bar(0, val, bottom=bottom, color=colors[traj], width=0.4, edgecolor="none")
+        bottom += val
+
+    ax.set_ylabel("Change (% of study area)", fontsize=16)
+    ax.set_title("Trajectories Overall", fontsize=18, pad=15)
+
+    for spine in ["top", "right", "bottom", "left"]:
+        ax.spines[spine].set_visible(True)
+        ax.spines[spine].set_color("black")
+        ax.spines[spine].set_linewidth(0.5)
+
+    ax.tick_params(axis="y", which="major", labelsize=18)
+    ax.set_xticks([])
+    ax.set_ylim(0, bottom * 1.05)
+
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=10))
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
+
+    legend_elements = [
+        Patch(facecolor=colors[2], label="2"),
+        Patch(facecolor=colors[3], label="3"),
+        Patch(facecolor=colors[4], label="4"),
+        Patch(facecolor=colors[5], label="5"),
+    ]
+
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.05, 0.5),
+        title="Trajectory",
+        title_fontsize=14,
+        alignment="left",
+        fontsize=14,
+        frameon=False,
+    )
+
+    fig.subplots_adjust(left=0.15, right=0.75, bottom=0.1, top=0.9)
+
+    charts_dir = os.path.join(output_path, "charts")
+    os.makedirs(charts_dir, exist_ok=True)
+
+    out_fig_path = os.path.join(charts_dir, "graphic_trajectory_percentage_overall.png")
+    plt.savefig(out_fig_path, dpi=300, bbox_inches="tight", format="png")
+    plt.show()
+    print(f"Figure saved to: {out_fig_path}")
+
 ###############################################################################
 #                                                                             #
 #                  5.1 TRANSITION MATRIX                                      #
