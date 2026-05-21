@@ -1914,6 +1914,113 @@ def plot_trajectory_contributions(
 
     print(f"Figure saved to: {output_fig}")
 
+def export_trajectory_intervals_csv_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+) -> ee.batch.Task:
+    """
+    Compute trajectory interval contributions using GEE and export to CSV.
+    Replaces the local Numba pixel-counting processing.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years to process.
+    drive_folder : str
+        The destination folder in Google Drive.
+    scale : int, optional
+        The spatial resolution for the export in meters. Default is 300.
+        
+    Returns
+    -------
+    ee.batch.Task
+        The submitted Earth Engine task object.
+    """
+    # 1. Build the stack and calculate trajectory using existing functions
+    image_stack, band_names = build_glance_stack(year_list=year_list)
+    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
+
+    # 2. Filter valid trajectories (we only care about 2, 3, 4, 5)
+    valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
+    trajectory_image = trajectory_image.updateMask(valid_traj_mask)
+
+    # 3. Define a global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None, 
+        False,
+    )
+
+    # 4. Process each interval using GEE server-side mapping
+    length = len(year_list)
+    indices = ee.List.sequence(0, length - 2)
+
+    def process_interval(idx):
+        idx = ee.Number(idx)
+        b_names = ee.List(band_names)
+
+        # Get current and next band names
+        b1_name = ee.String(b_names.get(idx))
+        b2_name = ee.String(b_names.get(idx.add(1)))
+
+        # Select the images for the interval
+        img1 = image_stack.select(b1_name)
+        img2 = image_stack.select(b2_name)
+
+        # Identify changes between t and t+1
+        # Note: NoData is already masked out by build_glance_stack
+        change_mask = img1.neq(img2)
+
+        # Mask the trajectory image with the changes in this specific interval
+        traj_for_interval = trajectory_image.updateMask(change_mask)
+
+        # Compute frequency histogram of trajectory classes
+        hist = traj_for_interval.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=global_region,
+            scale=scale,
+            maxPixels=1e13,
+            tileScale=16,
+        ).get('trajectory')
+
+        # Handle potential null returns if there are no changes
+        hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
+
+        # Format interval label (e.g., "2001-2010")
+        y_list = ee.List(year_list)
+        y_start = ee.Number(y_list.get(idx)).format('%d')
+        y_end = ee.Number(y_list.get(idx.add(1))).format('%d')
+        interval_label = y_start.cat('-').cat(y_end)
+
+        # Return as Feature (row for the CSV)
+        return ee.Feature(None, {
+            'Interval': interval_label,
+            '2': ee.Number(hist_dict.get('2', 0)),
+            '3': ee.Number(hist_dict.get('3', 0)),
+            '4': ee.Number(hist_dict.get('4', 0)),
+            '5': ee.Number(hist_dict.get('5', 0)),
+        })
+
+    # Apply mapping over intervals
+    intervals_fc = ee.FeatureCollection(indices.map(process_interval))
+
+    # 5. Create and start the Export task
+    task_desc = f"Trajectory_Contributions_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.table.toDrive(
+        collection=intervals_fc,
+        description=task_desc,
+        folder=drive_folder,
+        fileNamePrefix=task_desc,
+        fileFormat='CSV',
+        selectors=['Interval', '2', '3', '4', '5'],
+    )
+
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
+
+    return task
+
 ###############################################################################
 #                                                                             #
 #                  5. TRANSITION MATRIX                                       #
