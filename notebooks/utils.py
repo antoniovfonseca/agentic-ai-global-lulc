@@ -2935,6 +2935,104 @@ def plot_quantity_component_map(
     plt.show()
     print(f"Map figure saved successfully to: {output_figure_path}")
 
+def export_alternation_exchange_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = 255,
+) -> ee.batch.Task:
+    """
+    Compute and export a raster representing the Alternation Exchange Component using GEE.
+    This replaces the local block-by-block Numba matrix calculation.
+
+    Parameters
+    ----------
+    year_list : list
+        List of years to process.
+    drive_folder : str
+        Google Drive folder name for exports.
+    scale : int, optional
+        Spatial resolution in meters, by default 300.
+    nodata_val : int, optional
+        NoData value to be used for masking, by default 255.
+
+    Returns
+    -------
+    ee.batch.Task
+        The submitted Earth Engine export task.
+    """
+    print(f"Preparing Alternation Exchange GEE Task for {year_list[0]}-{year_list[-1]}...")
+
+    # 1. Fetch all images in the time series
+    # Note: GLANCE_COLLECTION_ID and GLANCE_CLASS_BAND must be defined in utils.py
+    imgs = []
+    for y in year_list:
+        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+            ee.Filter.calendarRange(y, y, 'year')
+        ).select(GLANCE_CLASS_BAND).mosaic()
+        img = img.updateMask(img.neq(nodata_val))
+        imgs.append(img)
+
+    # 2. Get unique classes from metadata
+    # Note: GLANCE_METADATA must be defined in utils.py
+    classes = list(GLANCE_METADATA.keys())
+
+    # 3. Accumulate total exchange
+    total_exchange = ee.Image(0).toUint8()
+
+    # Loop through all unique pairs of classes to find A->B and B->A exchanges
+    for i in range(len(classes)):
+        for j in range(i + 1, len(classes)):
+            class_a = classes[i]
+            class_b = classes[j]
+
+            count_a_b = ee.Image(0)
+            count_b_a = ee.Image(0)
+
+            # Sum transitions over time
+            for t in range(len(imgs) - 1):
+                img_t = imgs[t]
+                img_t1 = imgs[t+1]
+
+                # Transition A -> B
+                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
+                count_a_b = count_a_b.add(trans_a_b)
+
+                # Transition B -> A
+                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
+                count_b_a = count_b_a.add(trans_b_a)
+
+            # Exchange for this pair is min(A->B, B->A)
+            # Multiplied by 2 because both directions contribute to the total exchange
+            # (matching the original Numba matrix addition logic)
+            pair_exchange = count_a_b.min(count_b_a).multiply(2)
+
+            total_exchange = total_exchange.add(pair_exchange)
+
+    # 4. Apply NoData and set properties
+    total_exchange = total_exchange.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
+
+    # 5. Define a global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None, False
+    )
+
+    # 6. Define and start the Earth Engine export task
+    task_desc = f"Alternation_Exchange_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.image.toDrive(
+        image=total_exchange,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=global_region,
+        maxPixels=1e13,
+    )
+
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
+    return task
+
 ###############################################################################
 #                                                                             #
 #                  5.1 TRANSITION MATRIX                                      #
