@@ -3153,7 +3153,7 @@ def plot_alternation_exchange_map(
         frameon=False,
         fontsize=12,
         borderpad=1.2,
-        title="Exchange\nFrequency",
+        title="Exchange",
         title_fontsize=14,
         alignment="left",
         handletextpad=0.8,
