@@ -1918,6 +1918,9 @@ def export_trajectory_intervals_csv_gee(
     year_list: list,
     drive_folder: str,
     scale: int = 300,
+    collection_id: str = GLANCE_COLLECTION_ID,
+    band_name: str = GLANCE_CLASS_BAND,
+    nodata_val: int = NODATA_VALUE,
 ) -> ee.batch.Task:
     """
     Compute trajectory interval contributions using GEE and export to CSV.
@@ -1938,7 +1941,13 @@ def export_trajectory_intervals_csv_gee(
         The submitted Earth Engine task object.
     """
     # 1. Build the stack and calculate trajectory using existing functions
-    image_stack, band_names = build_glance_stack(year_list=year_list)
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val
+    )
+    
     trajectory_image = calculate_trajectory_gee(image_stack, band_names)
 
     # 2. Filter valid trajectories (we only care about 2, 3, 4, 5)
