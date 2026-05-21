@@ -1918,13 +1918,10 @@ def export_trajectory_intervals_csv_gee(
     year_list: list,
     drive_folder: str,
     scale: int = 300,
-    collection_id: str = GLANCE_COLLECTION_ID,
-    band_name: str = GLANCE_CLASS_BAND,
-    nodata_val: int = NODATA_VALUE,
 ) -> ee.batch.Task:
     """
     Compute trajectory interval contributions using GEE and export to CSV.
-    Replaces the local Numba pixel-counting processing.
+    Returns pixel counts instead of area.
 
     Parameters
     ----------
@@ -1940,28 +1937,32 @@ def export_trajectory_intervals_csv_gee(
     ee.batch.Task
         The submitted Earth Engine task object.
     """
-    # 1. Build the stack and calculate trajectory using existing functions
-    image_stack, band_names = build_glance_stack(
+    # 1. Build the stack (returns ONLY the image stack)
+    image_stack = build_glance_stack(
         year_list=year_list,
-        collection_id=collection_id,
-        band_name=band_name,
-        nodata_val=nodata_val
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE
     )
     
+    # 2. Reconstruct band names manually
+    band_names = [f"time_{y}" for y in year_list]
+    
+    # 3. Calculate trajectory
     trajectory_image = calculate_trajectory_gee(image_stack, band_names)
 
-    # 2. Filter valid trajectories (we only care about 2, 3, 4, 5)
+    # 4. Filter valid trajectories (we only care about 2, 3, 4, 5)
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
     trajectory_image = trajectory_image.updateMask(valid_traj_mask)
 
-    # 3. Define a global bounding box for the export
+    # 5. Define a global bounding box for the export
     global_region = ee.Geometry.Polygon(
         [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
         None, 
         False,
     )
 
-    # 4. Process each interval using GEE server-side mapping
+    # 6. Process each interval using GEE server-side mapping
     length = len(year_list)
     indices = ee.List.sequence(0, length - 2)
 
@@ -1978,13 +1979,12 @@ def export_trajectory_intervals_csv_gee(
         img2 = image_stack.select(b2_name)
 
         # Identify changes between t and t+1
-        # Note: NoData is already masked out by build_glance_stack
         change_mask = img1.neq(img2)
 
         # Mask the trajectory image with the changes in this specific interval
         traj_for_interval = trajectory_image.updateMask(change_mask)
 
-        # Compute frequency histogram of trajectory classes
+        # Compute frequency histogram of trajectory classes (which gives PIXEL COUNTS)
         hist = traj_for_interval.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=global_region,
@@ -2011,23 +2011,26 @@ def export_trajectory_intervals_csv_gee(
             '5': ee.Number(hist_dict.get('5', 0)),
         })
 
-    # Apply mapping over intervals
-    intervals_fc = ee.FeatureCollection(indices.map(process_interval))
+    # 7. Map over the intervals
+    features = ee.FeatureCollection(indices.map(process_interval))
 
-    # 5. Create and start the Export task
-    task_desc = f"Trajectory_Contributions_{year_list[0]}_{year_list[-1]}"
+    # 8. Prepare the CSV Export task
+    y_start = str(year_list[0])
+    y_end = str(year_list[-1])
+    task_desc = f"Trajectory_Contributions_{y_start}_{y_end}"
+    
     task = ee.batch.Export.table.toDrive(
-        collection=intervals_fc,
+        collection=features,
         description=task_desc,
         folder=drive_folder,
         fileNamePrefix=task_desc,
-        fileFormat='CSV',
-        selectors=['Interval', '2', '3', '4', '5'],
+        fileFormat="CSV"
     )
 
+    # 9. Start the task
     task.start()
     print(f"Task '{task_desc}' submitted to Google Earth Engine.")
-
+    
     return task
 
 def plot_trajectory_map(
