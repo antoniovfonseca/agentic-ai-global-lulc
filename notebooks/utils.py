@@ -2669,6 +2669,86 @@ def plot_trajectory_distribution(
 
 ###############################################################################
 #                                                                             #
+#                  5.1 CHANGE COMPONENTS                                      #
+#                                                                             #
+###############################################################################
+
+def export_quantity_component_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = 255,
+) -> ee.batch.Task:
+    """
+    Compute and export a raster representing the Quantity Component of change using GEE.
+
+    A pixel's quantity component is 1 when the begin class differs from
+    the finish class; otherwise, it is 0.
+
+    Parameters
+    ----------
+    year_list : list
+        List of years representing the timeline.
+    drive_folder : str
+        Google Drive folder name for exports.
+    scale : int, optional
+        Spatial resolution in meters, by default 300.
+    nodata_val : int, optional
+        NoData value to be used for masking, by default 255.
+
+    Returns
+    -------
+    ee.batch.Task
+        The submitted Earth Engine export task.
+    """
+    # 1. Fetch start and end years
+    start_year = year_list[0]
+    end_year = year_list[-1]
+
+    # 2. Fetch start and end images directly from the collection
+    # Note: GLANCE_COLLECTION_ID and GLANCE_CLASS_BAND must be defined in utils.py
+    start_img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+        ee.Filter.calendarRange(start_year, start_year, 'year')
+    ).select(GLANCE_CLASS_BAND).mosaic()
+    start_img = start_img.updateMask(start_img.neq(nodata_val))
+
+    end_img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+        ee.Filter.calendarRange(end_year, end_year, 'year')
+    ).select(GLANCE_CLASS_BAND).mosaic()
+    end_img = end_img.updateMask(end_img.neq(nodata_val))
+
+    # 3. Compute Quantity Component: 1 if start != end, else 0
+    quantity_image = start_img.neq(end_img).multiply(1).toUint8()
+
+    # 4. Apply NoData unmasking and set the system:no_data_value property
+    quantity_image = quantity_image.unmask(nodata_val)
+    quantity_image = quantity_image.set('system:no_data_value', nodata_val)
+
+    # 5. Define a global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None, False
+    )
+
+    # 6. Define the Earth Engine export task
+    task_desc = f"Quantity_Component_{start_year}_{end_year}"
+    task = ee.batch.Export.image.toDrive(
+        image=quantity_image,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=global_region,
+        maxPixels=1e13,
+    )
+
+    # 7. Start the export task
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
+
+    return task
+
+###############################################################################
+#                                                                             #
 #                  5.1 TRANSITION MATRIX                                      #
 #                                                                             #
 ###############################################################################
