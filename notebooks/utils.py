@@ -2021,6 +2021,210 @@ def export_trajectory_intervals_csv_gee(
 
     return task
 
+def plot_trajectory_map(
+    output_dir: str,
+    vrt_filename: str = "merged_trajectory.vrt",
+    scale_factor: float = 0.05,
+    nodata_val: int = 255,
+) -> None:
+    """
+    Plot the Trajectory raster map with cartographic elements,
+    using an optimized downsampling approach.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing the exported GEE tiles and where the map will be saved.
+    vrt_filename : str, optional
+        Name of the VRT file to plot.
+    scale_factor : float, optional
+        Scale factor to downsample the massive global raster to fit into memory.
+    nodata_val : int, optional
+        Value representing NoData in the raster to be masked out.
+    """
+
+    # 1. Locate VRT
+    raster_path = os.path.join(output_dir, vrt_filename)
+    if not os.path.exists(raster_path):
+        raise FileNotFoundError(f"Raster (VRT) not found: {raster_path}")
+
+    # 2. Calculate pixel size for scale bar
+    # Make sure compute_display_pixel_size_km is available in utils.py
+    pixel_size_km = compute_display_pixel_size_km(
+        raster_path=raster_path,
+        downsample_factor=scale_factor
+    )
+
+    # 3. Read raster and basic metadata with downsampling
+    with rasterio.open(raster_path) as src:
+        out_shape = (
+            max(1, int(src.height * scale_factor)),
+            max(1, int(src.width * scale_factor)),
+        )
+        data = src.read(
+            1,
+            out_shape=out_shape,
+            resampling=rasterio.enums.Resampling.nearest,
+        )
+
+        # Force masking using the provided nodata value
+        data = np.ma.masked_equal(data, nodata_val)
+
+        src_crs = src.crs
+        # Adjust the affine transform for the new downsampled resolution
+        transform = src.transform * src.transform.scale(
+            (src.width / data.shape[1]),
+            (src.height / data.shape[0]),
+        )
+        height, width = data.shape
+
+    # 4. Figure
+    fig, ax = plt.subplots(figsize=(20, 10), dpi=300)
+
+    # 5. Colormap
+    cmap = ListedColormap(
+        [
+            "#d9d9d9",  # Trajectory 1
+            "#990033",  # Trajectory 2
+            "#FDE725",  # Trajectory 3
+            "#ff9900",  # Trajectory 4
+            "#000066",  # Trajectory 5
+        ]
+    )
+    bounds = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
+    norm = BoundaryNorm(bounds, cmap.N)
+
+    # 6. Plot raster
+    ax.imshow(
+        data,
+        cmap=cmap,
+        interpolation="nearest",
+        norm=norm
+    )
+
+    # 7. Legend
+    legend_elements = [
+        Patch(
+            facecolor="#d9d9d9",
+            label="1 All stable",
+            edgecolor="black",
+            linewidth=0,
+        ),
+        Patch(
+            facecolor="#990033",
+            label="2 Extent stable with alternation",
+            edgecolor="black",
+            linewidth=0,
+        ),
+        Patch(
+            facecolor="#FDE725",
+            label="3 Extent change without alternation",
+            edgecolor="black",
+            linewidth=0,
+        ),
+        Patch(
+            facecolor="#ff9900",
+            label=(
+                "4 Extent change with alternation\n"
+                "   where extent transition matches\n"
+                "   a time interval transition"
+            ),
+            edgecolor="black",
+            linewidth=0,
+        ),
+        Patch(
+            facecolor="#000066",
+            label=(
+                "5 Extent change with alternation shift\n"
+                "   where extent transition differs\n"
+                "   from all time interval transitions"
+            ),
+            edgecolor="black",
+            linewidth=0,
+        ),
+    ]
+
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+        fontsize=14,
+        borderpad=1.2,
+        title="Trajectory",
+        title_fontsize=14,
+        alignment="left",
+        handletextpad=0.8,
+        columnspacing=2,
+        labelspacing=0.8,
+        handlelength=2.0,
+        handleheight=1.5,
+    )
+
+    # 8. Cartographic elements
+    scalebar = ScaleBar(
+        dx=pixel_size_km,
+        units="km",
+        length_fraction=0.15,
+        location="lower left",
+        box_alpha=0.6,
+        scale_formatter=lambda value, unit: f"{int(value * 1000)} km" if "M" in unit else f"{int(value)} km"
+    )
+    ax.add_artist(scalebar)
+
+    try:
+        # Ensure north_arrow is also in utils
+        north_arrow(
+            ax,
+            location="upper right",
+            shadow=False,
+            rotation={"degrees": 0},
+            scale=0.5,
+        )
+    except NameError:
+        print("north_arrow function not found. Skipping north arrow.")
+
+    # 9. Axes styling
+    ax.set_title("Trajectories", fontsize=18, pad=10)
+    ax.set_aspect("equal")
+
+    to_latlon = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+
+    def format_lon(x, pos):
+        x = np.clip(x, 0, width - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, height // 2, x)
+        lon, _ = to_latlon.transform(x_proj, y_proj)
+        return f"{lon:.1f}°"
+
+    def format_lat(y, pos):
+        y = np.clip(y, 0, height - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, y, width // 2)
+        _, lat = to_latlon.transform(x_proj, y_proj)
+        return f"{lat:.1f}°"
+
+    ax.xaxis.set_major_formatter(FuncFormatter(format_lon))
+    ax.yaxis.set_major_formatter(FuncFormatter(format_lat))
+
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+
+    ax.tick_params(axis="both", which="major", labelsize=10, pad=4)
+    plt.setp(ax.get_yticklabels(), rotation=90, va="center")
+
+    # 10. Save and Show
+    maps_dir = os.path.join(output_dir, "maps")
+    os.makedirs(maps_dir, exist_ok=True)
+    output_figure_path = os.path.join(maps_dir, "map_trajectories.png")
+
+    plt.savefig(
+        output_figure_path,
+        dpi=300,
+        bbox_inches="tight",
+        format="png",
+        pad_inches=0.5,
+    )
+    plt.show()
+    print(f"Map figure saved successfully to: {output_figure_path}")
 ###############################################################################
 #                                                                             #
 #                  5. TRANSITION MATRIX                                       #
