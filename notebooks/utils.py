@@ -2221,6 +2221,131 @@ def export_trajectory_task_gee(
 
     return task
 
+def plot_trajectory_contributions(
+    df: pd.DataFrame,
+    output_path: str,
+) -> None:
+    """
+    Create a stacked bar chart for trajectory contributions per interval.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with intervals as index and trajectory IDs (2, 3, 4, 5) as columns.
+    output_path : str
+        Path to output directory for saving figure.
+    """
+    # 0. Ensure columns are integers to match logic
+    df = df.copy()
+    df.columns = df.columns.astype(int)
+
+    # 1. Calculate the maximum value to determine scale factor
+    max_val = df.sum(axis=1).max()
+
+    if max_val >= 1_000_000_000_000:
+        scale_factor = 1_000_000_000_000
+        y_label = "Change (trillion pixels)"
+    elif max_val >= 1_000_000_000:
+        scale_factor = 1_000_000_000
+        y_label = "Change (billion pixels)"
+    elif max_val >= 1_000_000:
+        scale_factor = 1_000_000
+        y_label = "Change (million pixels)"
+    elif max_val >= 1_000:
+        scale_factor = 1_000
+        y_label = "Change (thousand pixels)"
+    else:
+        scale_factor = 1
+        y_label = "Change (pixels)"
+
+    # Apply scaling
+    df_scaled = df / scale_factor
+
+    # 2. Define colors and stacking order
+    colors = {
+        2: "#990033",
+        3: "#FDE725",
+        4: "#ff9900",
+        5: "#000066",
+    }
+
+    # Stacking order: 5 (bottom), 4, 3, 2 (top)
+    stack_order = [5, 4, 3, 2]
+
+    # 3. Create figure and axis
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # 4. Plot stacked bars
+    bottom = pd.Series(0.0, index=df_scaled.index)
+
+    for traj_id in stack_order:
+        if traj_id in df_scaled.columns:
+            values = df_scaled[traj_id]
+            ax.bar(
+                df_scaled.index,
+                values,
+                label=f"{traj_id}",
+                bottom=bottom,
+                color=colors[traj_id],
+                edgecolor="none",
+                width=0.9,
+            )
+            bottom += values
+
+    # 5. Customize axes and labels
+    ax.set_ylabel(y_label, fontsize=18)
+    ax.set_title("Trajectories during Time Intervals", fontsize=20, pad=15)
+
+    # X-Axis formatting: Horizontal labels
+    ax.tick_params(axis="x", labelsize=18, rotation=90)
+
+    # Y-Axis formatting (mticker)
+    ax.tick_params(axis="y", labelsize=18)
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=5))
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
+
+    # Spines visible, NO GRID
+    for spine in ["top", "right", "left", "bottom"]:
+        ax.spines[spine].set_visible(True)
+
+    # 6. Legend
+    handles, labels = ax.get_legend_handles_labels()
+
+    if handles:
+        # Reorder handles to match 2, 3, 4, 5
+        legend_order_map = {"2": 0, "3": 1, "4": 2, "5": 3}
+
+        # Sort handles based on labels
+        sorted_pairs = sorted(
+            zip(handles, labels),
+            key=lambda x: legend_order_map.get(x[1], 99),
+        )
+        sorted_handles, sorted_labels = zip(*sorted_pairs)
+
+        ax.legend(
+            sorted_handles,
+            sorted_labels,
+            loc="center left",
+            bbox_to_anchor=(1.01, 0.5),
+            title="Trajectory",
+            title_fontsize=14,
+            alignment="left",
+            fontsize=14,
+            frameon=False,
+        )
+
+    plt.tight_layout()
+
+    # 7. Save figure
+    charts_dir = os.path.join(output_path, "charts")
+    os.makedirs(charts_dir, exist_ok=True)
+
+    output_fig = os.path.join(charts_dir, "graphic_trajectory_time_interval.png")
+    plt.savefig(output_fig, dpi=300, bbox_inches="tight", format="png")
+    plt.show()
+
+    print(f"Figure saved to: {output_fig}")
+
 ###############################################################################
 #                                                                             #
 #                  5.1 TRANSITION MATRIX                                      #
