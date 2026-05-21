@@ -2225,6 +2225,89 @@ def plot_trajectory_map(
     )
     plt.show()
     print(f"Map figure saved successfully to: {output_figure_path}")
+
+def export_alternation_shift_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = NODATA_VALUE,
+) -> ee.batch.Task:
+    """
+    Compute and export a raster representing the Alternation Shift Component using GEE.
+    Calculated as: Total Changes - Quantity (Extension) - Total Exchange.
+    """
+    print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
+
+    # 1. Fetch all images in the time series
+    imgs = []
+    for y in year_list:
+        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+            ee.Filter.calendarRange(y, y, 'year')
+        ).select(GLANCE_CLASS_BAND).mosaic()
+        img = img.updateMask(img.neq(nodata_val))
+        imgs.append(img)
+
+    # 2. Calculate Total Changes across all intervals
+    total_changes = ee.Image(0).toUint8()
+    for t in range(len(imgs) - 1):
+        change = imgs[t].neq(imgs[t+1])
+        total_changes = total_changes.add(change)
+
+    # 3. Calculate Quantity Component (start != end)
+    quantity = imgs[0].neq(imgs[-1]).toUint8()
+
+    # 4. Calculate Total Exchange
+    classes = list(GLANCE_METADATA.keys())
+    total_exchange = ee.Image(0).toUint8()
+
+    for i in range(len(classes)):
+        for j in range(i + 1, len(classes)):
+            class_a = classes[i]
+            class_b = classes[j]
+
+            count_a_b = ee.Image(0)
+            count_b_a = ee.Image(0)
+
+            for t in range(len(imgs) - 1):
+                img_t = imgs[t]
+                img_t1 = imgs[t+1]
+
+                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
+                count_a_b = count_a_b.add(trans_a_b)
+
+                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
+                count_b_a = count_b_a.add(trans_b_a)
+
+            pair_exchange = count_a_b.min(count_b_a).multiply(2)
+            total_exchange = total_exchange.add(pair_exchange)
+
+    # 5. Calculate Alternation Shift (Changes - Quantity - Exchange)
+    # .max(0) ensures no negative values if discrepancies arise
+    shift = total_changes.subtract(quantity).subtract(total_exchange).max(0).toUint8()
+
+    # 6. Apply NoData and set properties
+    shift = shift.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
+
+    # 7. Define global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None, False
+    )
+
+    # 8. Define and start the Earth Engine export task
+    task_desc = f"Alternation_Shift_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.image.toDrive(
+        image=shift,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=global_region,
+        maxPixels=1e13,
+    )
+
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
+    return task
 ###############################################################################
 #                                                                             #
 #                  5. TRANSITION MATRIX                                       #
