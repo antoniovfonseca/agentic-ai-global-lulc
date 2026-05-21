@@ -2747,6 +2747,194 @@ def export_quantity_component_task_gee(
 
     return task
 
+def plot_quantity_component_map(
+    output_dir: str,
+    nodata_val: int,
+    raster_filename: str,
+    scale_factor: float = 0.05,
+) -> None:
+    """
+    Plot the Quantity Component (Extent Change) raster map with cartographic elements.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing the exported GEE tiles and where the map will be saved.
+    nodata_val : int
+        Value representing NoData in the raster to be masked out.
+    raster_filename : str
+        Prefix of the raster tiles to plot.
+    scale_factor : float, optional
+        Scale factor to downsample the massive global raster to fit into memory.
+
+    Returns
+    -------
+    None
+    """
+    # 1. Locate all raster tiles exported by GEE
+    raster_files = glob.glob(os.path.join(output_dir, f"{raster_filename}*.tif"))
+    if not raster_files:
+        raise FileNotFoundError(
+            f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
+        )
+
+    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
+    vrt_path = os.path.join(output_dir, "merged_quantity.vrt")
+    files_str = " ".join([f'"{f}"' for f in raster_files])
+    os.system(f"gdalbuildvrt {vrt_path} {files_str}")
+
+    # 3. Calculate pixel size for scale bar
+    # Assumes compute_display_pixel_size_km is defined in the same module
+    pixel_size_km = compute_display_pixel_size_km(
+        raster_path=vrt_path,
+        downsample_factor=scale_factor,
+    )
+
+    # 4. Read raster and basic metadata with downsampling
+    with rasterio.open(vrt_path) as src:
+        out_shape = (
+            max(1, int(src.height * scale_factor)),
+            max(1, int(src.width * scale_factor)),
+        )
+        data = src.read(
+            1,
+            out_shape=out_shape,
+            resampling=rasterio.enums.Resampling.nearest,
+        )
+
+        # Force masking using the provided nodata value
+        data = np.ma.masked_equal(data, nodata_val)
+
+        src_crs = src.crs
+        # Adjust the affine transform for the new downsampled resolution
+        transform = src.transform * src.transform.scale(
+            (src.width / data.shape[1]),
+            (src.height / data.shape[0]),
+        )
+        height, width = data.shape
+
+    # 5. Figure
+    fig, ax = plt.subplots(figsize=(20, 10), dpi=300)
+
+    # 6. Colormap for 0 and 1
+    cmap = ListedColormap(["#c0c0c0", "#fde725"])
+    bounds = [-0.5, 0.5, 1.5]
+    norm = BoundaryNorm(bounds, cmap.N)
+
+    # 7. Plot raster
+    ax.imshow(
+        data,
+        cmap=cmap,
+        interpolation="nearest",
+        norm=norm,
+    )
+
+    # 8. Legend (adapted for 0 and 1 only)
+    legend_elements = [
+        Patch(
+            facecolor="#c0c0c0",
+            label="0",
+            edgecolor="black",
+            linewidth=0,
+        ),
+        Patch(
+            facecolor="#fde725",
+            label="1",
+            edgecolor="black",
+            linewidth=0,
+        ),
+    ]
+
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+        fontsize=14,
+        borderpad=1.2,
+        title="Change",
+        title_fontsize=14,
+        alignment="left",
+        handletextpad=0.8,
+        columnspacing=2,
+        labelspacing=0.8,
+        handlelength=2.0,
+        handleheight=1.5,
+    )
+
+    # 9. Cartographic elements
+    degree_in_meters = 111320.0
+    dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
+
+    def km_formatter(value, unit):
+        if unit == "Mm":
+            return f"{int(value * 1000)} km"
+        return f"{int(value)} {unit}"
+
+    scalebar = ScaleBar(
+        dx=dx_meters,
+        units="m",
+        length_fraction=0.15,
+        location="lower left",
+        box_alpha=0.6,
+        scale_formatter=km_formatter,
+    )
+    ax.add_artist(scalebar)
+
+    try:
+        # Assumes north_arrow is defined in the same module
+        north_arrow(
+            ax,
+            location="upper right",
+            shadow=False,
+            rotation={"degrees": 0},
+            scale=0.5,
+        )
+    except NameError:
+        print("north_arrow function not found. Skipping north arrow.")
+
+    # 10. Axes styling
+    ax.set_title("Extent Change", fontsize=18, pad=10)
+    ax.set_aspect("equal")
+
+    to_latlon = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+
+    def format_lon(x, pos):
+        x = np.clip(x, 0, width - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, height // 2, x)
+        lon, _ = to_latlon.transform(x_proj, y_proj)
+        return f"{lon:.1f}°"
+
+    def format_lat(y, pos):
+        y = np.clip(y, 0, height - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, y, width // 2)
+        _, lat = to_latlon.transform(x_proj, y_proj)
+        return f"{lat:.1f}°"
+
+    ax.xaxis.set_major_formatter(FuncFormatter(format_lon))
+    ax.yaxis.set_major_formatter(FuncFormatter(format_lat))
+
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+
+    ax.tick_params(axis="both", which="major", labelsize=10, pad=4)
+    plt.setp(ax.get_yticklabels(), rotation=90, va="center")
+
+    # 11. Save and Show
+    maps_dir = os.path.join(output_dir, "maps")
+    os.makedirs(maps_dir, exist_ok=True)
+    output_figure_path = os.path.join(maps_dir, "map_extent_change.png")
+
+    plt.savefig(
+        output_figure_path,
+        dpi=300,
+        bbox_inches="tight",
+        format="png",
+        pad_inches=0.5,
+    )
+    plt.show()
+    print(f"Map figure saved successfully to: {output_figure_path}")
+
 ###############################################################################
 #                                                                             #
 #                  5.1 TRANSITION MATRIX                                      #
