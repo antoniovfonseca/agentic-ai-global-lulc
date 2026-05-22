@@ -2030,6 +2030,94 @@ def export_trajectory_intervals_csv_gee(
     
     return task
 
+def export_trajectory_overall_csv_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+) -> ee.batch.Task:
+    """
+    Compute overall trajectory contributions using GEE and export to CSV.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years to process.
+    drive_folder : str
+        The destination folder in Google Drive.
+    scale : int, optional
+        The spatial resolution for the export in meters. Default is 300.
+        
+    Returns
+    -------
+    ee.batch.Task
+        The submitted Earth Engine task object.
+    """
+    # 1. Build the stack (returns the image stack and band names)
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE
+    )
+    
+    # 2. Calculate overall trajectory
+    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
+
+    # 3. Filter valid trajectories (we only care about 2, 3, 4, 5)
+    valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
+    trajectory_image = trajectory_image.updateMask(valid_traj_mask)
+
+    # 4. Define a global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None, 
+        False,
+    )
+
+    # 5. Compute frequency histogram of trajectory classes
+    hist = trajectory_image.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram(),
+        geometry=global_region,
+        scale=scale,
+        maxPixels=1e13,
+        tileScale=16,
+    ).get('trajectory')
+
+    # Handle potential null returns if there are no changes
+    hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
+
+    # 6. Format into a Feature
+    y_start = str(year_list[0])
+    y_end = str(year_list[-1])
+    period_label = f"{y_start}-{y_end}"
+
+    feature = ee.Feature(None, {
+        'Period': period_label,
+        '2': ee.Number(hist_dict.get('2', 0)),
+        '3': ee.Number(hist_dict.get('3', 0)),
+        '4': ee.Number(hist_dict.get('4', 0)),
+        '5': ee.Number(hist_dict.get('5', 0)),
+    })
+
+    fc = ee.FeatureCollection([feature])
+
+    # 7. Prepare the CSV Export task
+    task_desc = f"Trajectory_Overall_{y_start}_{y_end}"
+    
+    task = ee.batch.Export.table.toDrive(
+        collection=fc,
+        description=task_desc,
+        folder=drive_folder,
+        fileNamePrefix=task_desc,
+        fileFormat="CSV"
+    )
+
+    # 8. Start the task
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
+    
+    return task
+
 def plot_trajectory_map(
     output_dir: str,
     vrt_filename: str = "merged_trajectory.vrt",
