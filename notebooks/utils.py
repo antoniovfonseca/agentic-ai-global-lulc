@@ -2731,22 +2731,21 @@ def plot_trajectory_contributions(
     print(f"Figure saved to: {output_fig}")
 
 def plot_trajectory_distribution(
-    output_path: str,
-    raster_prefix: str = "Trajectory_Analysis",
+    input_dir: str,
+    csv_filename: str,
 ) -> None:
     """
     Generate and save a stacked bar chart of trajectory class distributions.
 
-    Reads multiple tiled rasters using a Virtual Raster (VRT) and processes
-    them in chunks to avoid memory issues, calculating percentages.
+    Reads trajectory pixel counts from an exported GEE CSV file and 
+    calculates percentages.
 
     Parameters
     ----------
-    output_path : str
-        Directory path containing the input rasters and for output charts.
-    raster_prefix : str, optional
-        Prefix of the raster files to be merged into VRT. Default is
-        "Trajectory_Analysis".
+    input_dir : str
+        Directory path containing the input CSV and for output charts.
+    csv_filename : str
+        Name of the CSV file containing overall trajectory counts.
 
     Returns
     -------
@@ -2756,38 +2755,33 @@ def plot_trajectory_distribution(
     Raises
     ------
     FileNotFoundError
-        If no TIFF files matching the prefix are found.
+        If the specified CSV file is not found.
     """
-    # 1. Build Virtual Raster (VRT) from GEE tiles
-    tif_pattern = os.path.join(output_path, f"{raster_prefix}*.tif")
-    tif_files = glob.glob(tif_pattern)
+    import os
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
+    from matplotlib.patches import Patch
 
-    if not tif_files:
-        raise FileNotFoundError(f"No TIFF files found matching {tif_pattern}")
+    # 1. Load the CSV data
+    csv_path = os.path.join(input_dir, csv_filename)
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
-    vrt_path = os.path.join(output_path, "merged_trajectory.vrt")
+    df = pd.read_csv(csv_path)
 
-    print(f"Building VRT from {len(tif_files)} tiles...")
-    vrt_cmd = ["gdalbuildvrt", vrt_path] + tif_files
-    subprocess.run(vrt_cmd, check=True)
-    print(f"VRT created successfully at: {vrt_path}")
-
-    # 2. Process Raster Data in chunks (block by block)
+    # 2. Extract counts for trajectory classes 2, 3, 4, 5
     data_counts = {}
-    print("Processing raster data (this may take a few minutes for global scale)...")
-    with rasterio.open(vrt_path) as src:
-        nodata = src.nodata
-        for ji, window in src.block_windows(1):
-            traj_data = src.read(1, window=window)
-            valid_data = traj_data[traj_data != nodata]
-            if valid_data.size > 0:
-                unique_vals, counts = np.unique(valid_data, return_counts=True)
-                for val, count in zip(unique_vals, counts):
-                    data_counts[val] = data_counts.get(val, 0) + count
+    for col in ['2', '3', '4', '5']:
+        if col in df.columns:
+            # Sum in case there are multiple rows, though there should be only one
+            data_counts[int(col)] = df[col].sum()
+        else:
+            data_counts[int(col)] = 0.0
 
     total_pixels = sum(data_counts.values())
 
-    # Calculate percentages for classes 2, 3, 4, and 5
+    # 3. Calculate percentages
     percentages = {
         i: float((data_counts.get(i, 0) / total_pixels) * 100.0) if total_pixels > 0 else 0.0
         for i in [2, 3, 4, 5]
@@ -2796,6 +2790,7 @@ def plot_trajectory_distribution(
     ordered_trajs = [5, 4, 3, 2]
     colors = {5: "#000066", 4: "#ff9900", 3: "#FDE724", 2: "#990033"}
 
+    # 4. Plotting
     fig, ax = plt.subplots(figsize=(6, 6))
 
     bottom = 0.0
@@ -2839,7 +2834,8 @@ def plot_trajectory_distribution(
 
     fig.subplots_adjust(left=0.15, right=0.75, bottom=0.1, top=0.9)
 
-    charts_dir = os.path.join(output_path, "charts")
+    # 5. Save the figure
+    charts_dir = os.path.join(input_dir, "charts")
     os.makedirs(charts_dir, exist_ok=True)
 
     out_fig_path = os.path.join(charts_dir, "graphic_trajectory_percentage_overall.png")
