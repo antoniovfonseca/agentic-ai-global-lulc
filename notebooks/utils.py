@@ -2733,12 +2733,14 @@ def plot_trajectory_contributions(
 def plot_trajectory_distribution(
     input_dir: str,
     csv_filename: str,
+    total_pixels: float = None,
 ) -> None:
     """
     Generate and save a stacked bar chart of trajectory class distributions.
 
     Reads trajectory pixel counts from an exported GEE CSV file and 
-    calculates percentages.
+    calculates percentages. If total_pixels is provided, it calculates
+    the percentage relative to the entire study area.
 
     Parameters
     ----------
@@ -2746,6 +2748,8 @@ def plot_trajectory_distribution(
         Directory path containing the input CSV and for output charts.
     csv_filename : str
         Name of the CSV file containing overall trajectory counts.
+    total_pixels : float, optional
+        Total number of valid pixels in the study area, by default None.
 
     Returns
     -------
@@ -2774,14 +2778,14 @@ def plot_trajectory_distribution(
     data_counts = {}
     for col in ['2', '3', '4', '5']:
         if col in df.columns:
-            # Sum in case there are multiple rows, though there should be only one
             data_counts[int(col)] = df[col].sum()
         else:
             data_counts[int(col)] = 0.0
 
-    total_pixels = sum(data_counts.values())
-
     # 3. Calculate percentages
+    if total_pixels is None:
+        total_pixels = sum(data_counts.values())
+
     percentages = {
         i: float((data_counts.get(i, 0) / total_pixels) * 100.0) if total_pixels > 0 else 0.0
         for i in [2, 3, 4, 5]
@@ -2809,7 +2813,9 @@ def plot_trajectory_distribution(
 
     ax.tick_params(axis="y", which="major", labelsize=18)
     ax.set_xticks([])
-    ax.set_ylim(0, bottom * 1.05)
+    
+    # Handle limits dynamically based on percentage
+    ax.set_ylim(0, max(bottom * 1.2, 1.0))
 
     ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=10))
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
