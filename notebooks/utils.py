@@ -3462,6 +3462,141 @@ def plot_change_components_time_intervals(
     plt.show()
     print(f"Chart saved to: {out_fig_path}")
 
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+
+
+def plot_components_with_alternation(csv_path: str, output_path: str) -> None:
+    """
+    Plot overall change components as a single stacked bar with auto-scaled y-axis for Real Data.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the CSV file containing change components.
+    output_path : str
+        Directory where the output figure will be saved.
+    """
+    # 1. Load data
+    df = pd.read_csv(csv_path)
+
+    # 2. Define Colors and component order
+    components_color = {
+        "Quantity": "#1f77b4",
+        "Allocation_Exchange": "#ffd700",
+        "Alternation_Exchange": "#ff8080",
+        "Allocation_Shift": "#2ca02c",
+        "Alternation_Shift": "#990099",
+    }
+
+    component_order = [
+        "Quantity",
+        "Allocation_Shift",
+        "Allocation_Exchange",
+        "Alternation_Shift",
+        "Alternation_Exchange",
+    ]
+
+    # 3. Aggregate totals per component
+    component_totals = {
+        "Quantity": df[(df["Component"] == "Allocation_Quantity") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
+        "Allocation_Exchange": df[(df["Component"] == "Allocation_Exchange") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
+        "Allocation_Shift": df[(df["Component"] == "Allocation_Shift") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
+        "Alternation_Exchange": df[(df["Time_Interval"] == "alternation_exchange")]["Gain"].sum(),
+        "Alternation_Shift": df[(df["Time_Interval"] == "alternation_shift")]["Gain"].sum(),
+    }
+
+    # 4. Automatic scale based on the sum of all stacked components
+    total_change = sum(component_totals.values())
+
+    if total_change >= 1_000_000_000_000:
+        scale_factor = 1_000_000_000_000
+        y_label = "Change (trillion pixels)"
+    elif total_change >= 1_000_000_000:
+        scale_factor = 1_000_000_000
+        y_label = "Change (billion pixels)"
+    elif total_change >= 1_000_000:
+        scale_factor = 1_000_000
+        y_label = "Change (million pixels)"
+    elif total_change >= 1_000:
+        scale_factor = 1_000
+        y_label = "Change (thousand pixels)"
+    elif total_change >= 100:
+        scale_factor = 100
+        y_label = "Change (hundred pixels)"
+    else:
+        scale_factor = 1
+        y_label = "Change (pixels)"
+
+    # 5. Initialize figure and axis
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # 6. Plot each component in a stacked bar at a single x-position
+    bottom = 0.0
+    for component in component_order:
+        value = component_totals.get(component, 0.0) / scale_factor
+        ax.bar(
+            x=0,
+            height=value,
+            bottom=bottom,
+            color=components_color[component],
+            edgecolor="none",
+            width=0.4,
+        )
+        bottom += value
+
+    # 7. Axes formatting and labels
+    ax.set_ylabel(y_label, fontsize=16)
+    ax.set_title("Change Components Overall", fontsize=18, pad=15)
+    ax.set_xticks([])
+    ax.tick_params(axis="both", which="major", labelsize=18)
+
+    # 8. Set y-axis limits and major tick locators
+    y_max_scaled = bottom * 1.05 if bottom > 0 else 1.0
+    ax.set_ylim(0, y_max_scaled)
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=10, integer=True))
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
+
+    # 9. Configure visible spines for the plot frame
+    for spine in ["top", "right", "bottom", "left"]:
+        ax.spines[spine].set_visible(True)
+        ax.spines[spine].set_color("black")
+        ax.spines[spine].set_linewidth(0.5)
+
+    # 10. Define custom legend elements
+    legend_elements = [
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Alternation_Exchange"], label="Alternation Exchange"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Alternation_Shift"], label="Alternation Shift"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Allocation_Exchange"], label="Allocation Exchange"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Allocation_Shift"], label="Allocation Shift"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Quantity"], label="Quantity"),
+    ]
+
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.05, 0.5),
+        title="Component",
+        title_fontsize=14,
+        fontsize=14,
+        alignment="left",
+        frameon=False,
+    )
+
+    # Force the main plotting box to always occupy the exact same spatial coordinates in the figure
+    fig.subplots_adjust(left=0.15, right=0.75, bottom=0.1, top=0.9)
+
+    # 11. Final layout adjustment and export
+    charts_dir = os.path.join(output_path, "charts")
+    os.makedirs(charts_dir, exist_ok=True)
+
+    out_fig_path = os.path.join(charts_dir, "graphic_change_components_overall.png")
+    plt.savefig(out_fig_path, bbox_inches="tight", format="png", dpi=300)
+    plt.show()
+    print(f"Chart saved to: {out_fig_path}")
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
