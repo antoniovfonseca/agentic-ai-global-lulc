@@ -3319,6 +3319,149 @@ def generate_change_components_table(
     df_out.to_csv(output_file, index=False)
     print(f"\nSuccess! Final components saved to: {output_file}")
 
+def plot_change_components_time_intervals(
+    input_dir: str,
+    output_dir: str,
+) -> None:
+    """
+    Plot a stacked bar chart of change components over time intervals.
+
+    Reads the 'change_components.csv' file, aggregates the Gain
+    per time interval and component, and generates a scaled stacked
+    bar chart.
+
+    Parameters
+    ----------
+    input_dir : str
+        Directory path containing the 'tables' folder with the CSV.
+    output_dir : str
+        Directory path where the 'charts' folder will be saved.
+
+    Returns
+    -------
+    None
+        Saves the plot to disk and displays it.
+    """
+    import os
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as ticker
+
+    csv_path = os.path.join(input_dir, "tables", "change_components.csv")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Missing components file: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+
+    # Filter only time intervals (containing '-')
+    time_df = df[df["Time_Interval"].str.contains("-")]
+
+    # Aggregate totals per interval and component (Gain)
+    totals = time_df.groupby(["Time_Interval", "Component"])["Gain"].sum().unstack()
+
+    # Choose scale automatically based on max value
+    max_val = totals[["Quantity", "Shift", "Exchange"]].to_numpy().max()
+
+    if max_val >= 1_000_000_000_000:
+        scale_factor = 1_000_000_000_000
+        y_label = "Change (trillion pixels)"
+    elif max_val >= 1_000_000_000:
+        scale_factor = 1_000_000_000
+        y_label = "Change (billion pixels)"
+    elif max_val >= 1_000_000:
+        scale_factor = 1_000_000
+        y_label = "Change (million pixels)"
+    elif max_val >= 1_000:
+        scale_factor = 1_000
+        y_label = "Change (thousand pixels)"
+    elif max_val >= 100:
+        scale_factor = 100
+        y_label = "Change (hundred pixels)"
+    else:
+        scale_factor = 1
+        y_label = "Change (pixels)"
+
+    # Scaled totals per component for plotting
+    scaled_totals = totals[["Quantity", "Shift", "Exchange"]] / scale_factor
+
+    # Maximum stacked height
+    stacked_max = scaled_totals.sum(axis=1).max()
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    # Colors configuration
+    colors = ["#1f77b4", "#2ca02c", "#ffd700"]
+    components_color = {
+        "Quantity": "#1f77b4",
+        "Shift": "#2ca02c",
+        "Exchange": "#ffd700",
+    }
+    components = ["Quantity", "Shift", "Exchange"]
+
+    # Stacked bars using scaled values
+    for idx, comp in enumerate(components):
+        bottom_values = scaled_totals.iloc[:, :idx].sum(axis=1) if idx > 0 else 0
+        ax.bar(
+            totals.index,
+            scaled_totals[comp],
+            label=comp,
+            color=colors[idx],
+            edgecolor="none",
+            bottom=bottom_values,
+            width=0.9,
+        )
+
+    # Axes formatting
+    ax.set_ylabel(y_label, fontsize=18)
+    ax.set_title("Change Components during Time Intervals", fontsize=20, pad=15)
+    ax.tick_params(axis="both", which="major", labelsize=18)
+
+    # Adaptive rotation for x-axis tick labels
+    labels = ax.get_xticklabels()
+    n_labels = len(labels)
+
+    if n_labels <= 6:
+        rotation, ha = 0, "center"
+    elif n_labels <= 12:
+        rotation, ha = 45, "right"
+    else:
+        rotation, ha = 90, "center"
+
+    plt.setp(labels, rotation=rotation, ha=ha)
+
+    # Y-axis limits and ticks
+    y_max_scaled = stacked_max * 1.1
+    ax.set_ylim(0, y_max_scaled)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(nbins=6, integer=True))
+
+    # Legend
+    legend_elements = [
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Exchange"], label="Allocation Exchange"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Shift"], label="Allocation Shift"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Quantity"], label="Quantity"),
+    ]
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        title="Component",
+        title_fontsize=16,
+        fontsize=16,
+        alignment="left",
+        frameon=False,
+    )
+
+    # Save and show
+    plt.tight_layout()
+
+    charts_dir = os.path.join(output_dir, "charts")
+    os.makedirs(charts_dir, exist_ok=True)
+
+    out_fig_path = os.path.join(charts_dir, "chart_change_components_time_interval.png")
+    plt.savefig(out_fig_path, bbox_inches="tight", format="png", dpi=300)
+    plt.show()
+    print(f"Chart saved to: {out_fig_path}")
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
