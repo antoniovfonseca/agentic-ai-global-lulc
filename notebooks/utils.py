@@ -3597,6 +3597,209 @@ def plot_components_with_alternation(csv_path: str, output_path: str) -> None:
     plt.show()
     print(f"Chart saved to: {out_fig_path}")
 
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
+
+def plot_change_components_by_class(
+    input_dir: str,
+    output_dir: str,
+    class_labels_dict: dict,
+) -> None:
+    """
+    Plot per-class gains and losses as stacked bars with auto-scaled y-axis.
+
+    Parameters
+    ----------
+    input_dir : str
+        Directory path containing the 'tables' folder with the CSV.
+    output_dir : str
+        Directory path where the 'charts' folder will be saved.
+    class_labels_dict : dict
+        Dictionary mapping class IDs to names/metadata.
+    """
+    # 1. Load Data
+    csv_path = os.path.join(input_dir, "tables", "change_components.csv")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Missing components file: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+
+    # 2. Filter and Prepare Data
+    target_intervals = ["extent", "alternation_shift", "alternation_exchange"]
+    df_sub = df[df["Time_Interval"].isin(target_intervals)].copy()
+    df_sub["Component"] = df_sub["Component"].str.replace("Allocation_Quantity", "Quantity")
+
+    # 3. Colors and Order
+    components_map = {
+        "Quantity": "#1f77b4",
+        "Allocation_Exchange": "#ffd700",
+        "Alternation_Exchange": "#ff8080",
+        "Allocation_Shift": "#2ca02c",
+        "Alternation_Shift": "#990099",
+    }
+    comp_groups = ["Quantity", "Allocation_Shift", "Allocation_Exchange"]
+
+    # 4. Identify Classes and Sort by Net Quantity Change
+    classes = sorted(df_sub["Class"].unique())
+    class_stats = []
+
+    for cls in classes:
+        c_data = df_sub[df_sub["Class"] == cls]
+        qty_gain = c_data[c_data["Component"] == "Quantity"]["Gain"].sum()
+        qty_loss = c_data[c_data["Component"] == "Quantity"]["Loss"].sum()
+        class_stats.append((cls, qty_gain - qty_loss))
+
+    ordered_classes = [x[0] for x in sorted(class_stats, key=lambda x: x[1])]
+
+    # 5. Prepare Plot Data
+    plot_data = []
+    max_val = 0.0
+
+    for cls in ordered_classes:
+        c_data = df_sub[df_sub["Class"] == cls]
+
+        # --- GAINS ---
+        gains = {}
+        for comp in comp_groups:
+            gains[comp] = c_data[c_data["Component"] == comp]["Gain"].sum()
+
+        raw_alt_exc = c_data[c_data["Component"] == "Alternation_Exchange"]["Gain"].sum()
+        raw_alt_shift = c_data[c_data["Component"] == "Alternation_Shift"]["Gain"].sum()
+        net_alt = raw_alt_exc + raw_alt_shift
+
+        adj_alt_exc, adj_alt_shift = 0.0, 0.0
+        if net_alt > 0.0001:
+            if raw_alt_exc > 0:
+                adj_alt_exc = raw_alt_exc
+                adj_alt_shift = max(0, net_alt - raw_alt_exc)
+            else:
+                adj_alt_exc = 0
+                adj_alt_shift = net_alt
+
+        gains["Alternation_Exchange"] = adj_alt_exc
+        gains["Alternation_Shift"] = adj_alt_shift
+
+        # --- LOSSES ---
+        losses = {}
+        for comp in comp_groups:
+            losses[comp] = c_data[c_data["Component"] == comp]["Loss"].sum()
+
+        raw_alt_exc_l = c_data[c_data["Component"] == "Alternation_Exchange"]["Loss"].sum()
+        raw_alt_shift_l = c_data[c_data["Component"] == "Alternation_Shift"]["Loss"].sum()
+        net_alt_l = raw_alt_exc_l + raw_alt_shift_l
+
+        adj_alt_exc_l, adj_alt_shift_l = 0.0, 0.0
+        if net_alt_l > 0.0001:
+            if raw_alt_exc_l > 0:
+                adj_alt_exc_l = raw_alt_exc_l
+                adj_alt_shift_l = max(0, net_alt_l - raw_alt_exc_l)
+            else:
+                adj_alt_exc_l = 0
+                adj_alt_shift_l = net_alt_l
+
+        losses["Alternation_Exchange"] = adj_alt_exc_l
+        losses["Alternation_Shift"] = adj_alt_shift_l
+
+        # Track max height for scaling
+        max_val = max(max_val, sum(gains.values()), sum(losses.values()))
+        plot_data.append({"class": cls, "gains": gains, "losses": losses})
+
+    # 6. Determine Scale Factor
+    if max_val >= 1_000_000_000_000:
+        scale_factor, y_label = 1_000_000_000_000, "Loss and Gain (trillion pixels)"
+    elif max_val >= 1_000_000_000:
+        scale_factor, y_label = 1_000_000_000, "Loss and Gain (billion pixels)"
+    elif max_val >= 1_000_000:
+        scale_factor, y_label = 1_000_000, "Loss and Gain (million pixels)"
+    elif max_val >= 1_000:
+        scale_factor, y_label = 1_000, "Loss and Gain (thousand pixels)"
+    elif max_val >= 100:
+        scale_factor, y_label = 100, "Loss and Gain (hundred pixels)"
+    else:
+        scale_factor, y_label = 1, "Loss and Gain (pixels)"
+
+    # 7. Plotting
+    fig, ax = plt.subplots(figsize=(14, 8))
+    fig.subplots_adjust(left=0.1, right=0.75)
+
+    x_pos = np.arange(len(ordered_classes))
+    width = 0.6
+
+    stack_order = [
+        "Quantity",
+        "Allocation_Shift",
+        "Allocation_Exchange",
+        "Alternation_Shift",
+        "Alternation_Exchange",
+    ]
+
+    for idx, item in enumerate(plot_data):
+        # Gains (Upwards)
+        bottom_g = 0.0
+        for comp in stack_order:
+            val = item["gains"][comp] / scale_factor
+            if val > 0:
+                ax.bar(x_pos[idx], val, width, bottom=bottom_g, color=components_map[comp], edgecolor="none")
+                bottom_g += val
+
+        # Losses (Downwards)
+        bottom_l = 0.0
+        for comp in stack_order:
+            val = item["losses"][comp] / scale_factor
+            if val > 0:
+                ax.bar(x_pos[idx], -val, width, bottom=bottom_l, color=components_map[comp], edgecolor="none")
+                bottom_l -= val
+
+    # 8. Formatting
+    class_names = [
+        class_labels_dict.get(int(c) if str(c).isdigit() else c, {}).get("name", str(c))
+        for c in ordered_classes
+    ]
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(class_names, rotation=90, ha="center", fontsize=14)
+    ax.axhline(0, color="black", linewidth=0.8)
+
+    ax.set_ylabel(y_label, fontsize=20)
+    ax.set_title("Change Components by Class", fontsize=20, pad=15)
+    ax.tick_params(axis="x", labelsize=16)
+    ax.tick_params(axis="y", labelsize=24)
+
+    limit = max_val / scale_factor * 1.1 if max_val > 0 else 1.0
+    ax.set_ylim(-limit, limit)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True, nbins=10))
+    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%d"))
+
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color=components_map[c], label=c.replace("_", " "))
+        for c in reversed(stack_order)
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        title="Component",
+        title_fontsize=16,
+        alignment="left",
+        fontsize=16,
+        frameon=False,
+    )
+
+    plt.tight_layout()
+
+    charts_dir = os.path.join(output_dir, "charts")
+    os.makedirs(charts_dir, exist_ok=True)
+
+    out_fig_path = os.path.join(charts_dir, "chart_change_component_change_class.png")
+    plt.savefig(out_fig_path, bbox_inches="tight", format="png", dpi=300)
+    plt.show()
+    print(f"Chart saved to: {out_fig_path}")
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
