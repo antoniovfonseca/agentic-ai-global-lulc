@@ -3059,6 +3059,266 @@ def calculate_aggregated_components_csv(year_list: list, input_dir: str, output_
     print(f"Saved Alternation Exchange and Shift Matrices.")
     print("\nAll aggregated component matrices successfully generated!")
 
+import os
+import re
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+
+class ComponentCalculator:
+    """
+    Compute change components for a matrix.
+
+    Supports pre-decomposed matrices via force_component parameter.
+    """
+
+    def __init__(self, transition_matrix: np.ndarray) -> None:
+        """
+        Initialize the calculator with a transition matrix.
+
+        Parameters
+        ----------
+        transition_matrix : np.ndarray
+            Square matrix representing transitions.
+        """
+        self.matrix = transition_matrix.astype(float)
+        self.num_classes = transition_matrix.shape[0]
+        self.class_components: list[dict] = []
+
+    def calculate_components(self, force_component: str = None) -> "ComponentCalculator":
+        """
+        Calculate gain, loss, exchange, and shift for all classes.
+
+        Parameters
+        ----------
+        force_component : str, optional
+            If set to "Exchange" or "Shift", forces the interpretation of the
+            matrix content to that specific component.
+
+        Returns
+        -------
+        ComponentCalculator
+            Returns self for chaining.
+        """
+        for class_idx in range(self.num_classes):
+            gain_sum = np.sum(self.matrix[:, class_idx])
+            loss_sum = np.sum(self.matrix[class_idx, :])
+
+            # Standard net change calculation
+            q_gain = max(0.0, gain_sum - loss_sum)
+            q_loss = max(0.0, loss_sum - gain_sum)
+
+            if force_component == "Exchange":
+                exchange = loss_sum - self.matrix[class_idx, class_idx]
+                shift = 0.0
+                q_gain, q_loss = gain_sum - loss_sum, loss_sum - gain_sum
+            elif force_component == "Shift":
+                exchange = 0.0
+                shift = loss_sum - self.matrix[class_idx, class_idx]
+                q_gain, q_loss = 0.0, 0.0
+            else:
+                # Standard Pontius decomposition
+                mutual = np.sum(np.minimum(self.matrix[class_idx, :], self.matrix[:, class_idx]))
+                exchange = mutual - self.matrix[class_idx, class_idx]
+                total_trans = loss_sum - self.matrix[class_idx, class_idx]
+                shift = total_trans - q_loss - exchange
+
+            self.class_components.append({
+                "Quantity_Gain": q_gain,
+                "Quantity_Loss": q_loss,
+                "Exchange_Gain": exchange,
+                "Exchange_Loss": exchange,
+                "Shift_Gain": shift,
+                "Shift_Loss": shift,
+            })
+        return self
+
+
+def _extract_year_str(val) -> str:
+    """
+    Extract the first sequence of digits from a year string or integer.
+
+    Parameters
+    ----------
+    val : str or int
+        The value containing the year (e.g., "time_2000" or 2000).
+
+    Returns
+    -------
+    str
+        The extracted year digits.
+    """
+    match = re.search(r"(\d+)", str(val))
+    return match.group(1) if match else str(val)
+
+
+def process_matrix(
+    matrix_type: str,
+    input_dir: str,
+    years_list: list,
+    class_labels_dict: dict,
+    start_year=None,
+    end_year=None,
+) -> list:
+    """
+    Search for a transition matrix file and calculate its change components.
+
+    Parameters
+    ----------
+    matrix_type : str
+        Type of matrix ("interval", "extent", "sum", etc.).
+    input_dir : str
+        Directory where CSV files are stored.
+    years_list : list
+        List of all years in the timeline.
+    class_labels_dict : dict
+        Dictionary mapping class IDs to metadata.
+    start_year : str or int, optional
+        Start year for interval matrices.
+    end_year : str or int, optional
+        End year for interval matrices.
+
+    Returns
+    -------
+    list[dict]
+        List of dictionaries containing component values per class.
+    """
+    results = []
+    patterns = []
+
+    # 1. Determine naming patterns to search for
+    if matrix_type == "interval":
+        s_str, e_str = str(start_year), str(end_year)
+        patterns.extend([
+            f"transition_{s_str}_{e_str}.csv",
+            f"transition_matrix_{s_str}-{e_str}.csv",
+        ])
+        label_time = f"{s_str}-{e_str}"
+    else:
+        y0_str, yN_str = str(years_list[0]), str(years_list[-1])
+        patterns.extend([
+            f"transition_matrix_{matrix_type}_{y0_str}-{yN_str}.csv",
+        ])
+        label_time = matrix_type
+
+    # 2. Find the existing file in the main directory
+    full_path = None
+    for p in patterns:
+        path = os.path.join(input_dir, p)
+        if os.path.exists(path):
+            full_path = path
+            break
+
+    if not full_path:
+        return []
+
+    # 3. Process components
+    force_comp = (
+        "Exchange" if "exchange" in matrix_type else ("Shift" if "shift" in matrix_type else None)
+    )
+
+    # Load matrix safely handling standard square CSVs or raw GEE dict formats
+    try:
+        df_mat = pd.read_csv(full_path, index_col=0)
+        if df_mat.shape[1] > 0 and isinstance(df_mat.iloc[0, 0], str) and df_mat.iloc[0, 0].startswith("{"):
+            raise ValueError("Raw GEE format detected")
+    except (ValueError, TypeError):
+        # Assumes parse_gee_raw_csv is defined in utils.py from the previous step
+        df_mat = parse_gee_raw_csv(full_path)
+
+    calc = ComponentCalculator(df_mat.values).calculate_components(force_component=force_comp)
+
+    for idx, class_id in enumerate([int(c) for c in df_mat.index]):
+        cls_name = class_labels_dict.get(class_id, {}).get("name", f"Class {class_id}")
+        comp_vals = calc.class_components[idx]
+
+        for comp_name in ["Quantity", "Exchange", "Shift"]:
+            label_comp = comp_name
+            if matrix_type in ["extent", "sum"]:
+                label_comp = f"Allocation_{comp_name}"
+            if "alternation" in matrix_type:
+                label_comp = f"Alternation_{comp_name}"
+
+            results.append({
+                "Time_Interval": label_time,
+                "Class": cls_name,
+                "Component": label_comp,
+                "Gain": comp_vals[f"{comp_name}_Gain"],
+                "Loss": comp_vals[f"{comp_name}_Loss"],
+            })
+    return results
+
+
+def generate_change_components_table(
+    year_list: list,
+    input_dir: str,
+    output_dir: str,
+    class_labels_dict: dict,
+) -> None:
+    """
+    Main execution function to process all interval and aggregate matrices and export to CSV.
+
+    Parameters
+    ----------
+    year_list : list
+        List of years to process.
+    input_dir : str
+        Path to the input directory containing matrices.
+    output_dir : str
+        Path to the output directory.
+    class_labels_dict : dict
+        Dictionary mapping class IDs to metadata.
+    """
+    all_results = []
+
+    # 1. Process Annual Intervals
+    for i in tqdm(range(len(year_list) - 1), desc="Processing interval matrices"):
+        y_start = _extract_year_str(year_list[i])
+        y_end = _extract_year_str(year_list[i + 1])
+
+        all_results.extend(
+            process_matrix(
+                matrix_type="interval",
+                input_dir=input_dir,
+                years_list=year_list,
+                class_labels_dict=class_labels_dict,
+                start_year=y_start,
+                end_year=y_end,
+            )
+        )
+
+    # 2. Process Aggregated Matrices
+    aggregate_types = [
+        "extent",
+        "sum",
+        "alternation_exchange",
+        "alternation_shift",
+    ]
+    for mtype in tqdm(aggregate_types, desc="Processing aggregated matrices"):
+        all_results.extend(
+            process_matrix(
+                matrix_type=mtype,
+                input_dir=input_dir,
+                years_list=year_list,
+                class_labels_dict=class_labels_dict,
+            )
+        )
+
+    # 3. Save combined results
+    if not all_results:
+        print("\nNo matrices found to process.")
+        return
+
+    df_out = pd.DataFrame(all_results)
+
+    tables_dir = os.path.join(output_dir, "tables")
+    os.makedirs(tables_dir, exist_ok=True)
+
+    output_file = os.path.join(tables_dir, "change_components.csv")
+    df_out.to_csv(output_file, index=False)
+    print(f"\nSuccess! Final components saved to: {output_file}")
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
