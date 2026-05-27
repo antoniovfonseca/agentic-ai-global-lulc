@@ -2935,6 +2935,73 @@ def export_interval_transition_matrices_gee(
         
     return tasks
 
+import os
+import pandas as pd
+
+
+def calculate_aggregated_components_csv(
+    year_list: list,
+    input_dir: str,
+    output_dir: str,
+) -> None:
+    """
+    Compute aggregated change components algebraically using GEE CSVs.
+
+    This replaces the local Numba processing by utilizing the exported
+    annual (Sum) and long-term (Extent) transition matrices.
+
+    Parameters
+    ----------
+    year_list : list
+        List of years representing the timeline.
+    input_dir : str
+        Directory containing the exported GEE CSV matrices.
+    output_dir : str
+        Directory to save the resulting component matrices.
+    """
+    start_year = year_list[0]
+    end_year = year_list[-1]
+    period_label = f"{start_year}-{end_year}"
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    print("Computing Sum Matrix from annual GEE transitions...")
+    sum_csv_path = os.path.join(
+        output_dir,
+        f"transition_matrix_sum_{period_label}.csv",
+    )
+
+    try:
+        df_sum = compute_sum_matrix(
+            input_dir=input_dir,
+            output_path=sum_csv_path,
+        )
+    except Exception as e:
+        print(f"Error computing Sum Matrix. Ensure annual tasks finished: {e}")
+        return
+
+    extent_csv_path = os.path.join(
+        input_dir,
+        f"transition_{start_year}_{end_year}.csv",
+    )
+
+    try:
+        df_ext = pd.read_csv(extent_csv_path, index_col=0)
+    except FileNotFoundError:
+        print(f"Extent matrix not found: {extent_csv_path}")
+        print("Please wait for the long-term GEE export task to finish.")
+        return
+
+    print("Computing Allocation and Alternation components...")
+    compute_and_save_components(
+        df_sum=df_sum,
+        df_ext=df_ext,
+        output_dir=output_dir,
+        period_label=period_label,
+    )
+
+    print(f"Success! All components saved to: {output_dir}")
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
