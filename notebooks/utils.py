@@ -2937,70 +2937,127 @@ def export_interval_transition_matrices_gee(
 
 import os
 import pandas as pd
+import numpy as np
 
-
-def calculate_aggregated_components_csv(
-    year_list: list,
-    input_dir: str,
-    output_dir: str,
-) -> None:
+def parse_gee_raw_csv(file_path: str) -> pd.DataFrame:
     """
-    Compute aggregated change components algebraically using GEE CSVs.
-
-    This replaces the local Numba processing by utilizing the exported
-    annual (Sum) and long-term (Extent) transition matrices.
-
-    Parameters
-    ----------
-    year_list : list
-        List of years representing the timeline.
-    input_dir : str
-        Directory containing the exported GEE CSV matrices.
-    output_dir : str
-        Directory to save the resulting component matrices.
+    Parse a raw GEE transition CSV into a square Pandas DataFrame matrix.
     """
-    start_year = year_list[0]
-    end_year = year_list[-1]
-    period_label = f"{start_year}-{end_year}"
+    df_raw = pd.read_csv(file_path)
+    dict_str = None
+    for col in df_raw.columns:
+        val = str(df_raw[col].iloc[0])
+        if val.startswith("{") and "=" in val:
+            dict_str = val
+            break
 
-    os.makedirs(output_dir, exist_ok=True)
+    if not dict_str:
+        raise ValueError(f"Raw GEE dictionary string not found in {file_path}.")
 
-    print("Computing Sum Matrix from annual GEE transitions...")
-    sum_csv_path = os.path.join(
-        output_dir,
-        f"transition_matrix_sum_{period_label}.csv",
-    )
+    dict_str = dict_str.strip("{}")
+    pairs = dict_str.split(", ")
 
-    try:
-        df_sum = compute_sum_matrix(
-            input_dir=input_dir,
-            output_path=sum_csv_path,
-        )
-    except Exception as e:
-        print(f"Error computing Sum Matrix. Ensure annual tasks finished: {e}")
-        return
+    transitions = {}
+    classes = set()
 
-    extent_csv_path = os.path.join(
-        input_dir,
-        f"transition_{start_year}_{end_year}.csv",
-    )
+    for pair in pairs:
+        if not pair:
+            continue
+        k, v = pair.split("=")
+        k_int = int(k)
+        val_float = float(v)
+        # For GLanCE, transition classes are encoded as start * 100 + end
+        s_c = k_int // 100
+        e_c = k_int % 100
+        transitions[(s_c, e_c)] = val_float
+        classes.add(s_c)
+        classes.add(e_c)
 
-    try:
-        df_ext = pd.read_csv(extent_csv_path, index_col=0)
-    except FileNotFoundError:
-        print(f"Extent matrix not found: {extent_csv_path}")
-        print("Please wait for the long-term GEE export task to finish.")
-        return
+    classes_sorted = sorted(list(classes))
+    df_mat = pd.DataFrame(0.0, index=classes_sorted, columns=classes_sorted)
 
-    print("Computing Allocation and Alternation components...")
-    compute_and_save_components(
-        df_sum=df_sum,
-        df_ext=df_ext,
-        output_dir=output_dir,
-        period_label=period_label,
-    )
+    for (s, e), v in transitions.items():
+        df_mat.at[s, e] = v
 
-    print(f"Success! All components saved to: {output_dir}")
+    return df_mat
+
+def calculate_aggregated_components_csv(year_list: list, input_dir: str, output_dir: str) -> None:
+    """
+    Calculate Sum, Extent, Allocation, and Alternation matrices algebraically 
+    from raw GEE pixel transition CSVs.
+    """
+    y_start = year_list[0]
+    y_end = year_list[-1]
+    period_label = f"{y_start}-{y_end}"
+    
+    # 1. Compute Sum Matrix from interval transitions
+    print("Computing Sum Matrix from GEE pixel transitions...")
+    sum_matrix = None
+    for i in range(len(year_list) - 1):
+        y1, y2 = year_list[i], year_list[i+1]
+        interval_file = os.path.join(input_dir, f"transition_{y1}_{y2}.csv")
+        
+        if not os.path.exists(interval_file):
+            raise FileNotFoundError(f"Missing interval file: {interval_file}")
+            
+        df_interval = parse_gee_raw_csv(interval_file)
+        if sum_matrix is None:
+            sum_matrix = df_interval
+        else:
+            sum_matrix = sum_matrix.add(df_interval, fill_value=0.0)
+            
+    # Save Sum Matrix
+    out_sum = os.path.join(output_dir, f"transition_matrix_sum_{period_label}.csv")
+    sum_matrix.to_csv(out_sum)
+    print(f"Saved Sum Matrix: {out_sum}")
+    
+    # 2. Load Extent Matrix (Overall Transition)
+    print("Loading Extent Matrix...")
+    extent_file = os.path.join(input_dir, f"transition_{y_start}_{y_end}.csv")
+    if not os.path.exists(extent_file):
+        raise FileNotFoundError(f"Missing extent file: {extent_file}")
+        
+    extent_matrix = parse_gee_raw_csv(extent_file)
+    # Ensure indices match
+    all_classes = sorted(list(set(sum_matrix.index) | set(extent_matrix.index)))
+    sum_matrix = sum_matrix.reindex(index=all_classes, columns=all_classes, fill_value=0.0)
+    extent_matrix = extent_matrix.reindex(index=all_classes, columns=all_classes, fill_value=0.0)
+    
+    out_ext = os.path.join(output_dir, f"transition_matrix_extent_{period_label}.csv")
+    extent_matrix.to_csv(out_ext)
+    print(f"Saved Extent Matrix: {out_ext}")
+    
+    # 3. Compute Allocation Matrices
+    print("Computing Allocation Matrices...")
+    allocation_matrix = sum_matrix - extent_matrix
+    # Ensure no negative values due to floating point precision
+    allocation_matrix = allocation_matrix.clip(lower=0)
+    
+    alloc_exchange = np.minimum(allocation_matrix, allocation_matrix.T)
+    df_alloc_exc = pd.DataFrame(alloc_exchange, index=all_classes, columns=all_classes)
+    out_alloc_exc = os.path.join(output_dir, f"transition_matrix_allocation_exchange_{period_label}.csv")
+    df_alloc_exc.to_csv(out_alloc_exc)
+    
+    alloc_shift = allocation_matrix - df_alloc_exc
+    df_alloc_shift = pd.DataFrame(alloc_shift, index=all_classes, columns=all_classes)
+    out_alloc_shift = os.path.join(output_dir, f"transition_matrix_allocation_shift_{period_label}.csv")
+    df_alloc_shift.to_csv(out_alloc_shift)
+    print(f"Saved Allocation Exchange and Shift Matrices.")
+    
+    # 4. Compute Alternation Matrices
+    print("Computing Alternation Matrices...")
+    extent_exchange = np.minimum(extent_matrix, extent_matrix.T)
+    df_extent_exchange = pd.DataFrame(extent_exchange, index=all_classes, columns=all_classes)
+    
+    out_alt_exc = os.path.join(output_dir, f"transition_matrix_alternation_exchange_{period_label}.csv")
+    df_extent_exchange.to_csv(out_alt_exc)
+    
+    extent_shift = extent_matrix - df_extent_exchange
+    df_extent_shift = pd.DataFrame(extent_shift, index=all_classes, columns=all_classes)
+    out_alt_shift = os.path.join(output_dir, f"transition_matrix_alternation_shift_{period_label}.csv")
+    df_extent_shift.to_csv(out_alt_shift)
+    print(f"Saved Alternation Exchange and Shift Matrices.")
+    print("\nAll aggregated component matrices successfully generated!")
 
 def export_quantity_component_task_gee(
     year_list: list,
