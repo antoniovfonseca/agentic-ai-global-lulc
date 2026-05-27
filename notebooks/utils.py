@@ -2855,6 +2855,86 @@ def plot_trajectory_distribution(
 #                                                                             #
 ###############################################################################
 
+import ee
+
+def export_interval_transition_matrices_gee(
+    year_list: list,
+    drive_folder: str,
+    collection_id: str,
+    band_name: str,
+    scale: int = 300,
+    nodata_val: int = 255,
+) -> list:
+    """
+    Export LULC transition matrices between consecutive years to Google Drive.
+
+    Parameters
+    ----------
+    year_list : list
+        List of years representing the timeline.
+    drive_folder : str
+        Google Drive folder name for the exported CSV files.
+    collection_id : str
+        GEE ImageCollection ID containing the LULC rasters.
+    band_name : str
+        Band name representing the LULC classes.
+    scale : int, optional
+        Spatial resolution for the export, by default 300.
+    nodata_val : int, optional
+        Value representing NoData/Background to be masked out, by default 255.
+
+    Returns
+    -------
+    list
+        List of submitted ee.batch.Task objects.
+    """
+    tasks = []
+    collection = ee.ImageCollection(collection_id)
+    
+    for i in range(len(year_list) - 1):
+        start_year = year_list[i]
+        end_year = year_list[i + 1]
+        
+        # 1. Filter and extract the LULC images for the specific years
+        img_start = collection.filter(ee.Filter.calendarRange(start_year, start_year, 'year')).first().select(band_name)
+        img_end = collection.filter(ee.Filter.calendarRange(end_year, end_year, 'year')).first().select(band_name)
+        
+        # 2. Mask NoData values
+        img_start = img_start.updateMask(img_start.neq(nodata_val))
+        img_end = img_end.updateMask(img_end.neq(nodata_val))
+        
+        # 3. Create a transition image (StartClass * 100 + EndClass)
+        transition_img = img_start.multiply(100).add(img_end).rename('transition')
+        
+        # 4. Compute the frequency histogram over the globe
+        # Using a global geometry to get the transition matrix
+        histogram = transition_img.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=ee.Geometry.Polygon([-180, -90, 180, 90], None, False),
+            scale=scale,
+            maxPixels=1e13,
+            tileScale=16
+        )
+        
+        # 5. Create a FeatureCollection with a single feature to hold the dictionary
+        feature = ee.Feature(None, histogram)
+        fc = ee.FeatureCollection([feature])
+        
+        # 6. Configure and start the export task
+        task_name = f"transition_{start_year}_{end_year}"
+        task = ee.batch.Export.table.toDrive(
+            collection=fc,
+            description=task_name,
+            folder=drive_folder,
+            fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
+            fileFormat="CSV"
+        )
+        task.start()
+        tasks.append(task)
+        print(f"Task started for transition {start_year}-{end_year} (Scale: {scale}m)")
+        
+    return tasks
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
