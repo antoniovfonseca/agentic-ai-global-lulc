@@ -4174,16 +4174,6 @@ def plot_heatmap(
 ) -> None:
     """
     Plot a square matrix as a heatmap with adaptive integer colorbar.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        The square dataframe to plot.
-    title : str
-        The title of the plot.
-    save_path : str, optional
-        Path to save the figure image.
-    # ... (Docstring maintained as original)
     """
     if tick_fontsize_x is None or tick_fontsize_y is None:
         raise ValueError("Set `tick_fontsize_x` and `tick_fontsize_y` explicitly.")
@@ -4242,8 +4232,10 @@ def plot_heatmap(
     ax.set_xticks(range(len(labels)))
     ax.set_yticks(range(len(labels)))
 
-    # Assuming label_id_to_name is defined previously in utils.py
-    tick_names = label_id_to_name(labels) if 'label_id_to_name' in globals() else labels
+    # Usa as labels diretamente ou formata com alguma função label_id_to_name se ela existir em utils
+    tick_names = labels
+    if 'label_id_to_name' in globals():
+        tick_names = label_id_to_name(labels)
 
     ax.set_xticklabels(tick_names, rotation=rotate_xticks_deg, fontsize=tick_fontsize_x)
     ax.set_yticklabels(tick_names, fontsize=tick_fontsize_y)
@@ -4305,19 +4297,6 @@ def generate_all_heatmaps(matrices_dict: Dict[str, pd.DataFrame], output_path: s
                           interval_str: str, years: List[int], style_config: Dict[str, Any] = None) -> None:
     """
     Iterate over loaded matrices and generate heatmaps based on MATRIX_META.
-
-    Parameters
-    ----------
-    matrices_dict : dict
-        Dictionary containing the loaded matrices.
-    output_path : str
-        Base directory for saving the charts.
-    interval_str : str
-        String representing the time interval.
-    years : list
-        List of years processed.
-    style_config : dict, optional
-        Configuration dictionary for visual styling.
     """
     if style_config is None:
         style_config = {
