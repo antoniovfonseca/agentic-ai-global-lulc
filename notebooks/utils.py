@@ -4414,6 +4414,7 @@ def plot_heatmap(
     try:
         tick_names = label_id_to_name(
             labels,
+            class_labels_dict=GLANCE_METADATA
         )
     except NameError:
         tick_names = labels
