@@ -3800,6 +3800,69 @@ def plot_change_components_by_class(
     plt.show()
     print(f"Chart saved to: {out_fig_path}")
 
+
+import re
+from typing import List, Union, Dict
+
+def _extract_year_str(val: Union[str, int]) -> str:
+    """
+    Extract the first sequence of digits from a year string or integer.
+
+    Parameters
+    ----------
+    val : str or int
+        The value containing the year (e.g., "time_2000" or 2000).
+
+    Returns
+    -------
+    str
+        The extracted year digits.
+    """
+    match = re.search(r"(\d+)", str(val))
+    return match.group(1) if match else str(val)
+
+
+def validate_and_get_interval(
+    years: List[int],
+    output_path: str,
+    class_labels_dict: Dict[int, str]
+) -> str:
+    """
+    Validates global inputs and generates an interval string based on years.
+
+    Parameters
+    ----------
+    years : list of int
+        List of years to process.
+    output_path : str
+        Directory path for outputs.
+    class_labels_dict : dict
+        Dictionary mapping class values to labels.
+
+    Returns
+    -------
+    str
+        The formatted interval string (e.g., '2001-2019').
+
+    Raises
+    ------
+    ValueError
+        If any of the inputs are invalid or missing.
+    """
+    if not (isinstance(years, (list, tuple)) and len(years) >= 2):
+        raise ValueError("`years` missing, invalid, or contains fewer than 2 elements.")
+    
+    if not (isinstance(output_path, str) and output_path):
+        raise ValueError("`output_path` missing or invalid.")
+        
+    if not (isinstance(class_labels_dict, dict) and class_labels_dict):
+        raise ValueError("`class_labels_dict` missing or invalid.")
+
+    str_y0 = _extract_year_str(years[0])
+    str_y1 = _extract_year_str(years[-1])
+
+    return f"{str_y0}-{str_y1}"
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
