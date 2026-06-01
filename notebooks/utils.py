@@ -4019,6 +4019,356 @@ def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, 
 
     return matrices
 
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import matplotlib.ticker as mticker
+from typing import Dict, Any, List
+
+# Define matrix metadata dictionary globally for reuse
+MATRIX_META = {
+    "sum": ["sum", "Time Intervals", "flow"],
+    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
+    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
+    "ext": ["extent", "Extent", "stock"],
+    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
+    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
+    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
+}
+
+def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8, 
+                     show_diagonal: bool = False, equalize_diagonal_font: bool = False) -> None:
+    """
+    Annotate a heatmap with integer cell values and adaptive text color.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        The axes object where the heatmap is plotted.
+    m_vals : np.ndarray
+        The matrix containing the values to display.
+    fontsize : int, optional
+        The font size of the annotations (default is 8).
+    show_diagonal : bool, optional
+        If True, annotates the diagonal in white.
+        If False, skips the diagonal.
+    equalize_diagonal_font : bool, optional
+        If True, uses the same font size for all cells.
+    """
+    if m_vals.size == 0:
+        return
+
+    m_off = m_vals.copy()
+    np.fill_diagonal(m_off, np.nan)
+    data_off = m_off[np.isfinite(m_off)]
+
+    if data_off.size > 0:
+        max_pos = float(np.max(data_off)) if np.any(data_off > 0) else 0.0
+        min_neg = float(np.min(data_off)) if np.any(data_off < 0) else 0.0
+    else:
+        max_pos, min_neg = 0.0, 0.0
+
+    thresh_pos = 0.5 * max_pos
+    thresh_neg = 0.5 * min_neg
+    rows, cols = m_vals.shape
+
+    for i in range(rows):
+        for j in range(cols):
+            val = float(m_vals[i, j])
+
+            if i == j:
+                if not show_diagonal:
+                    continue
+                color = "white"
+            else:
+                if (val >= thresh_pos and val > 0) or (val <= thresh_neg and val < 0):
+                    color = "white"
+                else:
+                    color = "black"
+
+            txt = f"{int(round(val))}"
+            current_fontsize = fontsize if equalize_diagonal_font else (fontsize - 3 if i == j else fontsize)
+
+            ax.text(
+                j, i, txt, ha="center", va="center",
+                fontsize=current_fontsize, color=color, clip_on=True
+            )
+
+def _unit_label(suffix: str, base_label: str = "Pixels") -> str:
+    """
+    Build a descriptive label for the colorbar.
+
+    Parameters
+    ----------
+    suffix : str
+        The suffix for the unit (e.g., 'k', 'M').
+    base_label : str, optional
+        The base label text (default is "Pixels").
+
+    Returns
+    -------
+    str
+        The formatted unit label.
+    """
+    if suffix == "hundreds":
+        suffix = ""
+
+    mapping = {
+        "": base_label,
+        "k": f"{base_label} (thousands)",
+        "M": f"{base_label} (millions)",
+        "B": f"{base_label} (billions)",
+        "T": f"{base_label} (trillions)",
+    }
+    return mapping.get(suffix, f"{base_label} ({suffix})")
+
+def _unit_formatter(factor: float, decimals: int = 1):
+    """
+    Build a tick formatter that scales values by a factor.
+
+    Parameters
+    ----------
+    factor : float
+        The factor to divide the values by (e.g., 1000 or 1000000).
+    decimals : int, optional
+        The number of decimal places to include (default is 1).
+
+    Returns
+    -------
+    matplotlib.ticker.FuncFormatter
+        A formatter function for the plot ticks.
+    """
+    fmt = f"{{:.{decimals}f}}"
+    def _fmt(x: float, pos: int) -> str:
+        return fmt.format(x / factor)
+    return mticker.FuncFormatter(_fmt)
+
+def plot_heatmap(
+    df: pd.DataFrame,
+    title: str,
+    save_path: str = None,
+    figsize: tuple = None,
+    cmap: str = "YlOrRd",
+    vmin: float = 0.0,
+    vmax: float = None,
+    rotate_xticks_deg: int = 90,
+    cbar_label: str = "Number of pixels",
+    annotate: bool = True,
+    cell_size_inch: float = 0.8,
+    tick_fontsize: int = None,
+    ann_fontsize: int = 12,
+    cbar_fraction: float = 0.025,
+    cbar_pad: float = 0.02,
+    tick_fontsize_x: int = None,
+    tick_fontsize_y: int = None,
+    axis_label_fontsize: int = None,
+    title_fontsize: int = None,
+    cbar_tick_labelsize: int = None,
+    cbar_label_fontsize: int = 14,
+    xlabel: str = "To class",
+    ylabel: str = "From class",
+    show_diagonal_values: bool = False,
+    equalize_diagonal_font: bool = False,
+) -> None:
+    """
+    Plot a square matrix as a heatmap with adaptive integer colorbar.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The square dataframe to plot.
+    title : str
+        The title of the plot.
+    save_path : str, optional
+        Path to save the figure image.
+    # ... (Docstring maintained as original)
+    """
+    if tick_fontsize_x is None or tick_fontsize_y is None:
+        raise ValueError("Set `tick_fontsize_x` and `tick_fontsize_y` explicitly.")
+
+    axis_label_fontsize = axis_label_fontsize or 12
+    title_fontsize = title_fontsize or 14
+
+    labels = list(df.index)
+    matrix_values = df.values.astype(float)
+
+    matrix_scale = matrix_values.copy()
+    np.fill_diagonal(matrix_scale, 0.0)
+    finite_vals = matrix_scale[np.isfinite(matrix_scale)]
+
+    if finite_vals.size == 0:
+        has_negative = False
+        vmin_eff, vmax_eff = 0.0, 1.0
+    else:
+        has_negative = float(np.nanmin(finite_vals)) < 0.0
+        min_val, max_val = float(np.nanmin(finite_vals)), float(np.nanmax(finite_vals))
+
+        if has_negative:
+            vmin_eff, vmax_eff = min_val, max_val
+        else:
+            vmin_eff = vmin
+            vmax_eff = float(max_val) if vmax is None else float(vmax)
+
+        if vmin_eff == vmax_eff:
+            vmax_eff += 1.0
+
+    nrows, ncols = df.shape
+    if figsize is None:
+        figsize = (cell_size_inch * ncols, cell_size_inch * nrows)
+
+    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
+
+    cmap_neg = mcolors.LinearSegmentedColormap.from_list("CustomBlues", ["#08306b", "#b3e0ff"])
+
+    if has_negative:
+        matrix_pos = np.ma.masked_less_equal(matrix_values, 0.0)
+        norm_pos = mcolors.Normalize(vmin=0.0, vmax=vmax_eff)
+        ax.imshow(matrix_pos, aspect="equal", cmap=plt.cm.YlOrRd, norm=norm_pos)
+
+        matrix_neg = np.ma.masked_where(matrix_values >= 0.0, matrix_values)
+        norm_neg = mcolors.Normalize(vmin=vmin_eff, vmax=0.0)
+        ax.imshow(matrix_neg, aspect="equal", cmap=cmap_neg, norm=norm_neg)
+    else:
+        matrix_pos = np.ma.masked_equal(matrix_values, 0.0)
+        norm_pos = mcolors.Normalize(vmin=vmin_eff, vmax=vmax_eff)
+        ax.imshow(matrix_pos, aspect="equal", cmap=plt.cm.YlOrRd, norm=norm_pos)
+
+    diag_mask = np.eye(nrows, dtype=bool)
+    matrix_diag = np.ma.masked_where(~diag_mask, np.ones_like(matrix_values))
+    ax.imshow(matrix_diag, aspect="equal", cmap=mcolors.ListedColormap(["black"]), vmin=0, vmax=1)
+
+    ax.set_xticks(range(len(labels)))
+    ax.set_yticks(range(len(labels)))
+
+    # Assuming label_id_to_name is defined previously in utils.py
+    tick_names = label_id_to_name(labels) if 'label_id_to_name' in globals() else labels
+
+    ax.set_xticklabels(tick_names, rotation=rotate_xticks_deg, fontsize=tick_fontsize_x)
+    ax.set_yticklabels(tick_names, fontsize=tick_fontsize_y)
+    ax.set_xlabel(xlabel, fontsize=axis_label_fontsize)
+    ax.set_ylabel(ylabel, fontsize=axis_label_fontsize)
+    ax.set_title(title, fontsize=title_fontsize)
+
+    n_bar = 256
+    vals = np.linspace(vmin_eff, vmax_eff, n_bar)
+    colors_bar = []
+
+    for v in vals:
+        if has_negative and v < 0.0:
+            t = (v - vmin_eff) / (0.0 - vmin_eff) if vmin_eff < 0 else 0
+            colors_bar.append(cmap_neg(t))
+        elif v == 0:
+            colors_bar.append((1.0, 1.0, 1.0, 1.0))
+        else:
+            t = max(0.0, v) / vmax_eff if vmax_eff > 0.0 else 0.0
+            colors_bar.append(plt.cm.YlOrRd(t))
+
+    cmap_bar = mcolors.ListedColormap(colors_bar)
+    norm_bar = mcolors.Normalize(vmin=vmin_eff, vmax=vmax_eff)
+    scalar_mappable = plt.cm.ScalarMappable(cmap=cmap_bar, norm=norm_bar)
+    scalar_mappable.set_array([])
+
+    cbar = fig.colorbar(scalar_mappable, ax=ax, fraction=cbar_fraction, pad=cbar_pad)
+
+    max_abs = float(np.nanmax(np.abs(finite_vals))) if finite_vals.size > 0 else 0.0
+    if max_abs >= 1_000_000_000_000:
+        factor, suffix = 1_000_000_000_000.0, "T"
+    elif max_abs >= 1_000_000_000:
+        factor, suffix = 1_000_000_000.0, "B"
+    elif max_abs >= 1_000_000:
+        factor, suffix = 1_000_000.0, "M"
+    elif max_abs >= 1_000:
+        factor, suffix = 1_000.0, "k"
+    else:
+        factor, suffix = 1.0, ""
+
+    cbar.locator = mticker.MaxNLocator(nbins=2, integer=True, steps=[1, 2, 5, 10])
+    cbar.formatter = _unit_formatter(factor=factor, decimals=0)
+    cbar.set_label(_unit_label(suffix, base_label=cbar_label), rotation=270, labelpad=15, fontsize=cbar_label_fontsize)
+
+    if cbar_tick_labelsize is not None:
+        cbar.ax.tick_params(labelsize=cbar_tick_labelsize)
+    cbar.update_ticks()
+
+    if annotate:
+        annotate_heatmap(ax=ax, m_vals=matrix_values, fontsize=ann_fontsize, 
+                         show_diagonal=show_diagonal_values, equalize_diagonal_font=equalize_diagonal_font)
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.show()
+
+def generate_all_heatmaps(matrices_dict: Dict[str, pd.DataFrame], output_path: str, 
+                          interval_str: str, years: List[int], style_config: Dict[str, Any] = None) -> None:
+    """
+    Iterate over loaded matrices and generate heatmaps based on MATRIX_META.
+
+    Parameters
+    ----------
+    matrices_dict : dict
+        Dictionary containing the loaded matrices.
+    output_path : str
+        Base directory for saving the charts.
+    interval_str : str
+        String representing the time interval.
+    years : list
+        List of years processed.
+    style_config : dict, optional
+        Configuration dictionary for visual styling.
+    """
+    if style_config is None:
+        style_config = {
+            "tick_fontsize_x": 12,
+            "tick_fontsize_y": 12,
+            "axis_label_fontsize": 14,
+            "title_fontsize": 18,
+            "ann_fontsize": 9,
+            "cbar_fraction": 0.025,
+            "cbar_pad": 0.02,
+            "cbar_tick_labelsize": 12,
+            "cbar_label_fontsize": 16,
+            "cmap": "YlOrRd",
+            "cell_size_inch": 0.8,
+        }
+
+    str_y0, str_y1 = str(years[0]), str(years[-1])
+    print("Generating Heatmaps...")
+
+    for key, meta in MATRIX_META.items():
+        if key not in matrices_dict:
+            continue
+
+        suffix, title_part, m_type = meta
+        df_to_plot = matrices_dict[key]
+
+        is_flow = (m_type == "flow")
+        label_suffix = "..." if is_flow else "-"
+        full_title = f"{title_part} {str_y0}{label_suffix}{str_y1}"
+        save_fig_path = os.path.join(output_path, "charts", f"heatmap_{suffix}_{interval_str}.png")
+
+        x_label = "To class" if is_flow else "End class"
+        y_label = "From class" if is_flow else "Begin class"
+        cbar_lbl = "Transitions" if is_flow else "Pixels"
+        is_extent = (key == "ext")
+
+        plot_heatmap(
+            df=df_to_plot,
+            title=full_title,
+            save_path=save_fig_path,
+            xlabel=x_label,
+            ylabel=y_label,
+            show_diagonal_values=True,
+            cbar_label=cbar_lbl,
+            equalize_diagonal_font=is_extent,
+            **style_config,
+        )
+
+    final_out_dir = os.path.join(output_path, "charts")
+    print(f"All heatmaps saved to: {final_out_dir}")
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
