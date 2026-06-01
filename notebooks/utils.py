@@ -4574,9 +4574,7 @@ def plot_heatmap(
             annotate_heatmap(
                 ax=ax,
                 M=matrix_values,
-                fontsize=ann_fontsize,
-                show_diagonal=show_diagonal_values,
-                equalize_diagonal_font=equalize_diagonal_font,
+                fontsize=ann_fontsize
             )
         except NameError:
             pass
