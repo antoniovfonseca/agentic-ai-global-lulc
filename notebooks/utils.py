@@ -3915,6 +3915,32 @@ def load_square_matrix(csv_path: str) -> pd.DataFrame:
 
     return df
 
+import pandas as pd
+import numpy as np
+
+def compute_net_change_from_sum(df_sum: pd.DataFrame) -> pd.Series:
+    """
+    Compute net change per class from a SUM transition matrix.
+
+    Parameters
+    ----------
+    df_sum : pd.DataFrame
+        Square transition matrix representing total transitions over
+        the full time span.
+
+    Returns
+    -------
+    pd.Series
+        Net change for each class (gains - losses).
+    """
+    m_vals = df_sum.values.astype(float).copy()
+    np.fill_diagonal(m_vals, 0.0)
+
+    gains = m_vals.sum(axis=0)
+    losses = m_vals.sum(axis=1)
+    net_change = gains - losses
+
+    return pd.Series(net_change, index=df_sum.index)
 
 def reorder_all_matrices(matrices_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
     """
