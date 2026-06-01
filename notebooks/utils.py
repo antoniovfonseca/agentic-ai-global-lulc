@@ -4636,9 +4636,9 @@ def generate_all_heatmaps(
     title_map = {
         "ext": "Extent",
         "sum": "Sum",
-        "alloc_exc": "Allocation Exchange",
+        "all_exc": "Allocation Exchange",
         "alloc_shift": "Allocation Shift",
-        "qty_alloc_shift": "Quantity Allocation Shift",
+        "qty_shift": "Quantity & Allocation Shift",
         "alt_exc": "Alternation Exchange",
         "alt_shift": "Alternation Shift",
         "unacc_ext": "Unaccounted Extent",
