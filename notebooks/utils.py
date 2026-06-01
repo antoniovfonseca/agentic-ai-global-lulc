@@ -4544,6 +4544,7 @@ def plot_heatmap(
         cbar.formatter = _unit_formatter(
             factor=factor,
             decimals=0,
+            suffix=suffix
         )
 
         final_label = _unit_label(
