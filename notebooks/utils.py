@@ -3877,6 +3877,72 @@ MATRIX_META: Dict[str, list] = {
     "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
 }
 
+import pandas as pd
+from typing import Dict
+
+def load_square_matrix(csv_path: str) -> pd.DataFrame:
+    """
+    Load a square transition matrix from CSV and align row/column labels.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to a CSV file where the first column and the header row
+        contain class IDs (or labels), and the remaining cells contain
+        transition counts.
+
+    Returns
+    -------
+    pd.DataFrame
+        Square DataFrame with string labels on both rows and columns.
+        When row and column labels differ, their union is used and
+        missing cells are filled with 0.0.
+    """
+    df = pd.read_csv(csv_path, index_col=0)
+
+    df.index = df.index.map(str)
+    df.columns = df.columns.map(str)
+
+    if list(df.index) != list(df.columns):
+        labels = sorted(
+            set(df.index).union(df.columns),
+            key=lambda x: int(x),
+        )
+        df = df.reindex(index=labels, columns=labels).fillna(0.0)
+
+    if df.shape[0] != df.shape[1]:
+        raise ValueError(f"Matrix not square after alignment: {csv_path}")
+
+    return df
+
+
+def reorder_all_matrices(matrices_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    """
+    Reorder rows and columns of all matrices using net change from sum.
+
+    Parameters
+    ----------
+    matrices_dict : dict[str, pd.DataFrame]
+        Dictionary containing all loaded DataFrames.
+
+    Returns
+    -------
+    dict[str, pd.DataFrame]
+        Dictionary with all input DataFrames reindexed.
+    """
+    net_change = compute_net_change_from_sum(df_sum=matrices_dict["sum"])
+
+    order_labels = net_change.sort_values(ascending=True).index.tolist()
+
+    reordered = {}
+    for k, df in matrices_dict.items():
+        reordered[k] = df.reindex(
+            index=order_labels,
+            columns=order_labels,
+        )
+
+    return reordered
+
 def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, Any]:
     """
     Load transition matrices from CSVs and reorder them based on sum net change.
