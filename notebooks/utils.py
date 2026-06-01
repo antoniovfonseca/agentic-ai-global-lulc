@@ -3867,7 +3867,6 @@ import os
 from typing import Dict, Any
 
 # Define matrix metadata dictionary
-# Format: {key: [file_suffix, title_part, matrix_type]}
 MATRIX_META: Dict[str, list] = {
     "sum": ["sum", "Time Intervals", "flow"],
     "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
@@ -3885,7 +3884,7 @@ def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, 
     Parameters
     ----------
     output_path : str
-        Base directory path where the outputs (and 'tables' folder) are stored.
+        Base directory path where the matrix CSV files are stored.
     interval_str : str
         Formatted interval string (e.g., '2001-2019').
 
@@ -3894,19 +3893,17 @@ def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, 
     dict
         Dictionary containing the loaded and reordered matrices.
     """
-    tables_dir = os.path.join(output_path, "tables")
     matrices = {}
 
     for key, meta in MATRIX_META.items():
-        csv_path = os.path.join(tables_dir, f"transition_matrix_{meta[0]}_{interval_str}.csv")
+        # Look directly in the output_path instead of the 'tables' subfolder
+        csv_path = os.path.join(output_path, f"transition_matrix_{meta[0]}_{interval_str}.csv")
         
-        # Assuming load_square_matrix is already defined in utils.py
         if os.path.exists(csv_path):
             matrices[key] = load_square_matrix(csv_path=csv_path)
         else:
             print(f"Warning: Matrix file not found at {csv_path}")
 
-    # Assuming reorder_all_matrices is already defined in utils.py
     if matrices:
         matrices = reorder_all_matrices(matrices_dict=matrices)
 
