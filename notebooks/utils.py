@@ -4232,7 +4232,6 @@ def plot_heatmap(
     ax.set_xticks(range(len(labels)))
     ax.set_yticks(range(len(labels)))
 
-    # Usa as labels diretamente ou formata com alguma função label_id_to_name se ela existir em utils
     tick_names = labels
     if 'label_id_to_name' in globals():
         tick_names = label_id_to_name(labels)
