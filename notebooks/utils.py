@@ -3863,6 +3863,55 @@ def validate_and_get_interval(
 
     return f"{str_y0}-{str_y1}"
 
+import os
+from typing import Dict, Any
+
+# Define matrix metadata dictionary
+# Format: {key: [file_suffix, title_part, matrix_type]}
+MATRIX_META: Dict[str, list] = {
+    "sum": ["sum", "Time Intervals", "flow"],
+    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
+    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
+    "ext": ["extent", "Extent", "stock"],
+    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
+    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
+    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
+}
+
+def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, Any]:
+    """
+    Load transition matrices from CSVs and reorder them based on sum net change.
+
+    Parameters
+    ----------
+    output_path : str
+        Base directory path where the outputs (and 'tables' folder) are stored.
+    interval_str : str
+        Formatted interval string (e.g., '2001-2019').
+
+    Returns
+    -------
+    dict
+        Dictionary containing the loaded and reordered matrices.
+    """
+    tables_dir = os.path.join(output_path, "tables")
+    matrices = {}
+
+    for key, meta in MATRIX_META.items():
+        csv_path = os.path.join(tables_dir, f"transition_matrix_{meta[0]}_{interval_str}.csv")
+        
+        # Assuming load_square_matrix is already defined in utils.py
+        if os.path.exists(csv_path):
+            matrices[key] = load_square_matrix(csv_path=csv_path)
+        else:
+            print(f"Warning: Matrix file not found at {csv_path}")
+
+    # Assuming reorder_all_matrices is already defined in utils.py
+    if matrices:
+        matrices = reorder_all_matrices(matrices_dict=matrices)
+
+    return matrices
+
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
