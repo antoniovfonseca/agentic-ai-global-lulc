@@ -64,10 +64,13 @@ def get_year_from_filename(filepath):
 
 ###############################################################################
 #                                                                             #
-#                  3. VISUALIZATION FUNCTIONS (EARTH ENGINE)                  #
+#                  3. GLanCE VISUALIZATION                                    #
 #                                                                             #
 ###############################################################################
 
+# ---------------------------------------------------------------------------
+# 3.1 SELECT GLanCE YEAR
+# ---------------------------------------------------------------------------
 def get_glance_map(year):
     """
     Generates an interactive map with GLANCE land cover data for a given year.
@@ -135,6 +138,10 @@ def get_glance_map(year):
         print(f"Error loading GLANCE data for {year}: {e}")
         return None
 
+# ---------------------------------------------------------------------------
+# 3.2 PLOT GLanCE
+# ---------------------------------------------------------------------------
+
 def view_local_rasters(input_dir=DEFAULT_INPUT_DIR):
     """
     Creates an interactive map displaying all .tif files found in the specified directory.
@@ -198,10 +205,13 @@ def view_local_rasters(input_dir=DEFAULT_INPUT_DIR):
 
 ###############################################################################
 #                                                                             #
-#                  4. ANALYSIS FUNCTIONS (LOCAL RASTER)                       #
+#                  4. CLASS AREA                                              #
 #                                                                             #
 ###############################################################################
 
+# ---------------------------------------------------------------------------
+# 4.1 EXPORT PIXEL COUNTS
+# ---------------------------------------------------------------------------
 def export_global_pixel_counts_tasks(
     year_list: list,
     drive_folder: str,
@@ -281,6 +291,10 @@ def export_global_pixel_counts_tasks(
 
     # 10. Return the list of triggered tasks
     return tasks_list
+
+# ---------------------------------------------------------------------------
+# 4.1 PLOT PIXEL COUNTS
+# ---------------------------------------------------------------------------
 
 def plot_pixel_counts_bar_chart(
     input_dir: str,
