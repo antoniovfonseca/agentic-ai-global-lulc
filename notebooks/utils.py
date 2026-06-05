@@ -1,14 +1,25 @@
 import os
 import re
 import glob
+
 import ee
-import json
 import geemap
 import numpy as np
 import pandas as pd
 import rasterio
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import matplotlib.ticker as ticker
+import matplotlib.ticker as mticker
+
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+
+from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib.patches import Patch
+from matplotlib.ticker import FuncFormatter
+from matplotlib_scalebar.scalebar import ScaleBar
+from pyproj import Transformer, Geod
+from tqdm import tqdm
 
 ###############################################################################
 #                                                                             #
@@ -589,6 +600,10 @@ def plot_pixel_counts_bar_chart(
 #                  5. NUMBER OF CHANGES FUNCTIONS                             #
 #                                                                             #
 ###############################################################################
+
+# ---------------------------------------------------------------------------
+# 5.1 EXPORT NUMBER OF CHANGES PER INTERVAL
+# ---------------------------------------------------------------------------
 def export_global_change_frequency_tasks(
     year_list: list[int],
     drive_folder: str,
@@ -742,6 +757,10 @@ def export_global_change_frequency_tasks(
         )
 
     return tasks_list
+
+# ---------------------------------------------------------------------------
+# 5.1 PLOT NUMBER OF CHANGES DURING TIME INTERVALS
+# ---------------------------------------------------------------------------
 
 import os
 import glob
@@ -1078,6 +1097,10 @@ def plot_global_change_frequency_bar_chart(
     print(
         f"Chart saved to: {output_fig}",
     )
+
+# ---------------------------------------------------------------------------
+# 5.2 PLOT NUMBER OF CHANGES OVERALL
+# ---------------------------------------------------------------------------
 
 import os
 import glob
@@ -1416,6 +1439,10 @@ def plot_number_of_changes_distribution(
         f"Chart saved to: {out_fig_path}",
     )
 
+# ---------------------------------------------------------------------------
+# 5.3 EXPORT NUMBER OF CHANGES RASTER
+# ---------------------------------------------------------------------------
+
 import ee
 
 def export_global_number_of_changes_raster_task(
@@ -1499,6 +1526,9 @@ def export_global_number_of_changes_raster_task(
     print(f"Task started: {task_name} (Scale: {scale}m, NoData: {NODATA_VALUE})")
     return task
 
+# ---------------------------------------------------------------------------
+# 5.4 PLOT NUMBER OF CHANGES MAP
+# ---------------------------------------------------------------------------
 import os
 import glob
 import numpy as np
