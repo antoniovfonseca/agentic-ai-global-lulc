@@ -38,13 +38,13 @@ GLANCE_CLASS_BAND = "LC"
 
 # 3. Class Metadata
 GLANCE_METADATA = {
-    1: {'name': 'Water',      'color': '#0000FF'},
-    2: {'name': 'Ice/Snow',   'color': '#AAAAFF'},
-    3: {'name': 'Developed',  'color': '#FF0000'},
-    4: {'name': 'Barren',     'color': '#964B00'},
-    5: {'name': 'Trees',      'color': '#006400'},
-    6: {'name': 'Shrub',      'color': '#FFBB22'},
-    7: {'name': 'Herbaceous', 'color': '#FFFF4C'}
+    1: {'name': 'Water',      'color': '#386cb0'},
+    2: {'name': 'Ice/Snow',   'color': '#FFFFFF'},
+    3: {'name': 'Developed',  'color': '#FF1809'},
+    4: {'name': 'Barren',     'color': '#000000'},
+    5: {'name': 'Trees',      'color': '#00A212'},
+    6: {'name': 'Shrub',      'color': '#9EDF85'},
+    7: {'name': 'Herbaceous', 'color': '#FFFF96'}
 }
 
 ###############################################################################
@@ -625,12 +625,7 @@ def export_global_change_frequency_tasks(
     """
     # 1. Define global bounding box geometry
     global_geom = ee.Geometry.Rectangle(
-        [
-            -180,
-            -90,
-            180,
-            90,
-        ],
+        [-180,-90,180,90,],
         'EPSG:4326',
         False,
     )
@@ -1609,7 +1604,11 @@ def plot_number_of_changes_map(
     """
 
     # 1. Locate all raster tiles exported by GEE
-    raster_files = glob.glob(os.path.join(output_dir, f"{raster_filename}*.tif"))
+    raster_files = glob.glob(
+        os.path.join(
+            output_dir,
+            f"{raster_filename}*.tif")
+        )
     if not raster_files:
         raise FileNotFoundError(
             f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
@@ -1650,7 +1649,10 @@ def plot_number_of_changes_map(
         height, width = data.shape
 
     # 5. Figure
-    fig, ax = plt.subplots(figsize=(20, 10), dpi=300)
+    fig, ax = plt.subplots(
+        figsize=(20, 10), 
+        dpi=300
+    )
 
     # Data range
     min_val = int(np.ma.min(data))
@@ -1738,10 +1740,19 @@ def plot_number_of_changes_map(
         print("north_arrow function not found. Skipping north arrow.")
 
     # 10. Axes styling
-    ax.set_title("Number of Changes", fontsize=18, pad=10)
+    ax.set_title(
+        "Number of Changes",
+        fontsize=18,
+        pad=10
+    )
+    
     ax.set_aspect("equal")
 
-    to_latlon = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+    to_latlon = Transformer.from_crs(
+        src_crs,
+        "EPSG:4326",
+        always_xy=True
+    )
 
     def format_lon(x, pos):
         x = np.clip(x, 0, width - 1)
@@ -1761,13 +1772,31 @@ def plot_number_of_changes_map(
     ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
     ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
 
-    ax.tick_params(axis="both", which="major", labelsize=10, pad=4)
-    plt.setp(ax.get_yticklabels(), rotation=90, va="center")
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=10,
+        pad=4
+    )
+    plt.setp(
+        ax.get_yticklabels(),
+        rotation=90,
+        va="center"
+    )
 
     # 11. Save and Show
-    maps_dir = os.path.join(output_dir, "maps")
-    os.makedirs(maps_dir, exist_ok=True)
-    output_figure_path = os.path.join(maps_dir, "map_number_of_changes.png")
+    maps_dir = os.path.join(
+        output_dir,
+        "maps"
+    )
+    os.makedirs(
+        maps_dir,
+        exist_ok=True
+    )
+    output_figure_path = os.path.join(
+        maps_dir,
+        "map_number_of_changes.png"
+    )
 
     plt.savefig(
         output_figure_path,
@@ -2056,14 +2085,26 @@ def plot_trajectory_contributions(
             bottom += values
 
     # 5. Customize axes and labels
-    ax.set_ylabel(y_label, fontsize=18)
-    ax.set_title("Trajectories during Time Intervals", fontsize=20, pad=15)
-
+    ax.set_ylabel(
+        y_label,
+        fontsize=18
+    )
+    ax.set_title(
+        "Trajectories during Time Intervals",
+        fontsize=20,
+        pad=15
+    )
     # X-Axis formatting: Horizontal labels
-    ax.tick_params(axis="x", labelsize=18, rotation=90)
-
+    ax.tick_params(
+        axis="x",
+        labelsize=18,
+        rotation=90
+    )
     # Y-Axis formatting (mticker)
-    ax.tick_params(axis="y", labelsize=18)
+    ax.tick_params(
+        axis="y",
+        labelsize=18
+    )
     ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=5))
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
 
@@ -2100,11 +2141,24 @@ def plot_trajectory_contributions(
     plt.tight_layout()
 
     # 7. Save figure
-    charts_dir = os.path.join(output_path, "charts")
-    os.makedirs(charts_dir, exist_ok=True)
-
-    output_fig = os.path.join(charts_dir, "graphic_trajectory_time_interval.png")
-    plt.savefig(output_fig, dpi=300, bbox_inches="tight", format="png")
+    charts_dir = os.path.join(
+        output_path,
+        "charts"
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True
+    )
+    output_fig = os.path.join(
+        charts_dir,
+        "graphic_trajectory_time_interval.png"
+    )
+    plt.savefig(
+        output_fig,
+        dpi=300,
+        bbox_inches="tight",
+        format="png"
+    )
     plt.show()
 
     print(f"Figure saved to: {output_fig}")
@@ -2201,6 +2255,318 @@ def export_trajectory_overall_csv_gee(
     
     return task
 
+
+def plot_trajectory_contributions(
+    df: pd.DataFrame,
+    output_path: str,
+) -> None:
+    """
+    Create a stacked bar chart for trajectory contributions per interval.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with intervals as index and trajectory IDs (2, 3, 4, 5) as columns.
+    output_path : str
+        Path to output directory for saving figure.
+    """
+    # 0. Ensure columns are integers to match logic
+    df = df.copy()
+    df.columns = df.columns.astype(int)
+
+    # 1. Calculate the maximum value to determine scale factor
+    max_val = df.sum(axis=1).max()
+
+    if max_val >= 1_000_000_000_000:
+        scale_factor = 1_000_000_000_000
+        y_label = "Change (trillion pixels)"
+    elif max_val >= 1_000_000_000:
+        scale_factor = 1_000_000_000
+        y_label = "Change (billion pixels)"
+    elif max_val >= 1_000_000:
+        scale_factor = 1_000_000
+        y_label = "Change (million pixels)"
+    elif max_val >= 1_000:
+        scale_factor = 1_000
+        y_label = "Change (thousand pixels)"
+    else:
+        scale_factor = 1
+        y_label = "Change (pixels)"
+
+    # Apply scaling
+    df_scaled = df / scale_factor
+
+    # 2. Define colors and stacking order
+    colors = {
+        2: "#990033",
+        3: "#FDE725",
+        4: "#ff9900",
+        5: "#000066",
+    }
+
+    # Stacking order: 5 (bottom), 4, 3, 2 (top)
+    stack_order = [5, 4, 3, 2]
+
+    # 3. Create figure and axis
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # 4. Plot stacked bars
+    bottom = pd.Series(0.0, index=df_scaled.index)
+
+    for traj_id in stack_order:
+        if traj_id in df_scaled.columns:
+            values = df_scaled[traj_id]
+            ax.bar(
+                df_scaled.index,
+                values,
+                label=f"{traj_id}",
+                bottom=bottom,
+                color=colors[traj_id],
+                edgecolor="none",
+                width=0.9,
+            )
+            bottom += values
+
+    # 5. Customize axes and labels
+    ax.set_ylabel(
+        y_label,
+        fontsize=18
+    )
+    ax.set_title(
+        "Trajectories during Time Intervals",
+        fontsize=20,
+        pad=15
+    )
+
+    # X-Axis formatting: Horizontal labels
+    ax.tick_params(
+        axis="x",
+        labelsize=18,
+        rotation=90
+    )
+
+    # Y-Axis formatting (mticker)
+    ax.tick_params(
+        axis="y",
+        labelsize=18
+    )
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=5))
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
+
+    # Spines visible, NO GRID
+    for spine in ["top", "right", "left", "bottom"]:
+        ax.spines[spine].set_visible(True)
+
+    # 6. Legend
+    handles, labels = ax.get_legend_handles_labels()
+
+    if handles:
+        # Reorder handles to match 2, 3, 4, 5
+        legend_order_map = {"2": 0, "3": 1, "4": 2, "5": 3}
+
+        # Sort handles based on labels
+        sorted_pairs = sorted(
+            zip(handles, labels),
+            key=lambda x: legend_order_map.get(x[1], 99),
+        )
+        sorted_handles, sorted_labels = zip(*sorted_pairs)
+
+        ax.legend(
+            sorted_handles,
+            sorted_labels,
+            loc="center left",
+            bbox_to_anchor=(1.01, 0.5),
+            title="Trajectory",
+            title_fontsize=14,
+            alignment="left",
+            fontsize=14,
+            frameon=False,
+        )
+
+    plt.tight_layout()
+
+    # 7. Save figure
+    charts_dir = os.path.join(
+        output_path,
+        "charts"
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True
+    )
+
+    output_fig = os.path.join(
+        charts_dir,
+        "graphic_trajectory_time_interval.png"
+    )
+    plt.savefig(
+        output_fig,
+        dpi=300,
+        bbox_inches="tight",
+        format="png"
+    )
+    plt.show()
+
+    print(f"Figure saved to: {output_fig}")
+
+# ---------------------------------------------------------------------------
+# 5.5 PLOT TRAJECTORY OVERALL
+# ---------------------------------------------------------------------------
+
+def plot_trajectory_distribution(
+    input_dir: str,
+    csv_filename: str,
+    total_pixels: float = None,
+) -> None:
+    """
+    Generate and save a stacked bar chart of trajectory class distributions.
+
+    Reads trajectory pixel counts from an exported GEE CSV file and 
+    calculates percentages. If total_pixels is provided, it calculates
+    the percentage relative to the entire study area.
+
+    Parameters
+    ----------
+    input_dir : str
+        Directory path containing the input CSV and for output charts.
+    csv_filename : str
+        Name of the CSV file containing overall trajectory counts.
+    total_pixels : float, optional
+        Total number of valid pixels in the study area, by default None.
+
+    Returns
+    -------
+    None
+        The function saves the plot to disk and displays it.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified CSV file is not found.
+    """
+
+    # 1. Load the CSV data
+    csv_path = os.path.join(input_dir, csv_filename)
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+
+    # 2. Extract counts for trajectory classes 2, 3, 4, 5
+    data_counts = {}
+    for col in ['2', '3', '4', '5']:
+        if col in df.columns:
+            data_counts[int(col)] = df[col].sum()
+        else:
+            data_counts[int(col)] = 0.0
+
+    # 3. Calculate percentages
+    if total_pixels is None:
+        total_pixels = sum(data_counts.values())
+
+    percentages = {
+        i: float((data_counts.get(i, 0) / total_pixels) * 100.0) if total_pixels > 0 else 0.0
+        for i in [2, 3, 4, 5]
+    }
+
+    ordered_trajs = [5, 4, 3, 2]
+    colors = {
+        5: "#000066",
+        4: "#ff9900",
+        3: "#FDE724",
+        2: "#990033"
+    }
+
+    # 4. Plotting
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    bottom = 0.0
+    for traj in ordered_trajs:
+        val = percentages[traj]
+        ax.bar(0,
+               val,
+               bottom=bottom,
+               color=colors[traj],
+               width=0.4,
+               edgecolor="none"
+        )
+        bottom += val
+
+    ax.set_ylabel(
+        "Change (% of study area)",
+        fontsize=16
+    )
+    ax.set_title(
+        "Trajectories Overall",
+        fontsize=18,
+        pad=15
+    )
+
+    for spine in ["top", "right", "bottom", "left"]:
+        ax.spines[spine].set_visible(True)
+        ax.spines[spine].set_color("black")
+        ax.spines[spine].set_linewidth(0.5)
+
+    ax.tick_params(
+        axis="y",
+        which="major",
+        labelsize=18
+    )
+    ax.set_xticks([])
+    
+    # Handle limits dynamically based on percentage
+    ax.set_ylim(0, max(bottom * 1.2, 1.0))
+
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=10))
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
+
+    legend_elements = [
+        Patch(facecolor=colors[2], label="2"),
+        Patch(facecolor=colors[3], label="3"),
+        Patch(facecolor=colors[4], label="4"),
+        Patch(facecolor=colors[5], label="5"),
+    ]
+
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.05, 0.5),
+        title="Trajectory",
+        title_fontsize=14,
+        alignment="left",
+        fontsize=14,
+        frameon=False,
+    )
+
+    fig.subplots_adjust(
+        left=0.15,
+        right=0.75,
+        bottom=0.1,
+        top=0.9
+    )
+
+    # 5. Save the figure
+    charts_dir = os.path.join(
+        input_dir,
+        "charts"
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True
+    )
+
+    out_fig_path = os.path.join(
+        charts_dir,
+        "graphic_trajectory_percentage_overall.png"
+    )
+    plt.savefig(
+        out_fig_path,
+        dpi=300,
+        bbox_inches="tight",
+        format="png"
+    )
+    plt.show()
+    print(f"Figure saved to: {out_fig_path}")
 
 # ---------------------------------------------------------------------------
 # 5.5 PLOT TRAJECTORY MAP
@@ -2541,249 +2907,7 @@ def build_glance_stack(
 
 
 
-def plot_trajectory_contributions(
-    df: pd.DataFrame,
-    output_path: str,
-) -> None:
-    """
-    Create a stacked bar chart for trajectory contributions per interval.
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame with intervals as index and trajectory IDs (2, 3, 4, 5) as columns.
-    output_path : str
-        Path to output directory for saving figure.
-    """
-    # 0. Ensure columns are integers to match logic
-    df = df.copy()
-    df.columns = df.columns.astype(int)
-
-    # 1. Calculate the maximum value to determine scale factor
-    max_val = df.sum(axis=1).max()
-
-    if max_val >= 1_000_000_000_000:
-        scale_factor = 1_000_000_000_000
-        y_label = "Change (trillion pixels)"
-    elif max_val >= 1_000_000_000:
-        scale_factor = 1_000_000_000
-        y_label = "Change (billion pixels)"
-    elif max_val >= 1_000_000:
-        scale_factor = 1_000_000
-        y_label = "Change (million pixels)"
-    elif max_val >= 1_000:
-        scale_factor = 1_000
-        y_label = "Change (thousand pixels)"
-    else:
-        scale_factor = 1
-        y_label = "Change (pixels)"
-
-    # Apply scaling
-    df_scaled = df / scale_factor
-
-    # 2. Define colors and stacking order
-    colors = {
-        2: "#990033",
-        3: "#FDE725",
-        4: "#ff9900",
-        5: "#000066",
-    }
-
-    # Stacking order: 5 (bottom), 4, 3, 2 (top)
-    stack_order = [5, 4, 3, 2]
-
-    # 3. Create figure and axis
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    # 4. Plot stacked bars
-    bottom = pd.Series(0.0, index=df_scaled.index)
-
-    for traj_id in stack_order:
-        if traj_id in df_scaled.columns:
-            values = df_scaled[traj_id]
-            ax.bar(
-                df_scaled.index,
-                values,
-                label=f"{traj_id}",
-                bottom=bottom,
-                color=colors[traj_id],
-                edgecolor="none",
-                width=0.9,
-            )
-            bottom += values
-
-    # 5. Customize axes and labels
-    ax.set_ylabel(y_label, fontsize=18)
-    ax.set_title("Trajectories during Time Intervals", fontsize=20, pad=15)
-
-    # X-Axis formatting: Horizontal labels
-    ax.tick_params(axis="x", labelsize=18, rotation=90)
-
-    # Y-Axis formatting (mticker)
-    ax.tick_params(axis="y", labelsize=18)
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=5))
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
-
-    # Spines visible, NO GRID
-    for spine in ["top", "right", "left", "bottom"]:
-        ax.spines[spine].set_visible(True)
-
-    # 6. Legend
-    handles, labels = ax.get_legend_handles_labels()
-
-    if handles:
-        # Reorder handles to match 2, 3, 4, 5
-        legend_order_map = {"2": 0, "3": 1, "4": 2, "5": 3}
-
-        # Sort handles based on labels
-        sorted_pairs = sorted(
-            zip(handles, labels),
-            key=lambda x: legend_order_map.get(x[1], 99),
-        )
-        sorted_handles, sorted_labels = zip(*sorted_pairs)
-
-        ax.legend(
-            sorted_handles,
-            sorted_labels,
-            loc="center left",
-            bbox_to_anchor=(1.01, 0.5),
-            title="Trajectory",
-            title_fontsize=14,
-            alignment="left",
-            fontsize=14,
-            frameon=False,
-        )
-
-    plt.tight_layout()
-
-    # 7. Save figure
-    charts_dir = os.path.join(output_path, "charts")
-    os.makedirs(charts_dir, exist_ok=True)
-
-    output_fig = os.path.join(charts_dir, "graphic_trajectory_time_interval.png")
-    plt.savefig(output_fig, dpi=300, bbox_inches="tight", format="png")
-    plt.show()
-
-    print(f"Figure saved to: {output_fig}")
-
-def plot_trajectory_distribution(
-    input_dir: str,
-    csv_filename: str,
-    total_pixels: float = None,
-) -> None:
-    """
-    Generate and save a stacked bar chart of trajectory class distributions.
-
-    Reads trajectory pixel counts from an exported GEE CSV file and 
-    calculates percentages. If total_pixels is provided, it calculates
-    the percentage relative to the entire study area.
-
-    Parameters
-    ----------
-    input_dir : str
-        Directory path containing the input CSV and for output charts.
-    csv_filename : str
-        Name of the CSV file containing overall trajectory counts.
-    total_pixels : float, optional
-        Total number of valid pixels in the study area, by default None.
-
-    Returns
-    -------
-    None
-        The function saves the plot to disk and displays it.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the specified CSV file is not found.
-    """
-    import os
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as mticker
-    from matplotlib.patches import Patch
-
-    # 1. Load the CSV data
-    csv_path = os.path.join(input_dir, csv_filename)
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"CSV file not found: {csv_path}")
-
-    df = pd.read_csv(csv_path)
-
-    # 2. Extract counts for trajectory classes 2, 3, 4, 5
-    data_counts = {}
-    for col in ['2', '3', '4', '5']:
-        if col in df.columns:
-            data_counts[int(col)] = df[col].sum()
-        else:
-            data_counts[int(col)] = 0.0
-
-    # 3. Calculate percentages
-    if total_pixels is None:
-        total_pixels = sum(data_counts.values())
-
-    percentages = {
-        i: float((data_counts.get(i, 0) / total_pixels) * 100.0) if total_pixels > 0 else 0.0
-        for i in [2, 3, 4, 5]
-    }
-
-    ordered_trajs = [5, 4, 3, 2]
-    colors = {5: "#000066", 4: "#ff9900", 3: "#FDE724", 2: "#990033"}
-
-    # 4. Plotting
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    bottom = 0.0
-    for traj in ordered_trajs:
-        val = percentages[traj]
-        ax.bar(0, val, bottom=bottom, color=colors[traj], width=0.4, edgecolor="none")
-        bottom += val
-
-    ax.set_ylabel("Change (% of study area)", fontsize=16)
-    ax.set_title("Trajectories Overall", fontsize=18, pad=15)
-
-    for spine in ["top", "right", "bottom", "left"]:
-        ax.spines[spine].set_visible(True)
-        ax.spines[spine].set_color("black")
-        ax.spines[spine].set_linewidth(0.5)
-
-    ax.tick_params(axis="y", which="major", labelsize=18)
-    ax.set_xticks([])
-    
-    # Handle limits dynamically based on percentage
-    ax.set_ylim(0, max(bottom * 1.2, 1.0))
-
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=10))
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
-
-    legend_elements = [
-        Patch(facecolor=colors[2], label="2"),
-        Patch(facecolor=colors[3], label="3"),
-        Patch(facecolor=colors[4], label="4"),
-        Patch(facecolor=colors[5], label="5"),
-    ]
-
-    ax.legend(
-        handles=legend_elements,
-        loc="center left",
-        bbox_to_anchor=(1.05, 0.5),
-        title="Trajectory",
-        title_fontsize=14,
-        alignment="left",
-        fontsize=14,
-        frameon=False,
-    )
-
-    fig.subplots_adjust(left=0.15, right=0.75, bottom=0.1, top=0.9)
-
-    # 5. Save the figure
-    charts_dir = os.path.join(input_dir, "charts")
-    os.makedirs(charts_dir, exist_ok=True)
-
-    out_fig_path = os.path.join(charts_dir, "graphic_trajectory_percentage_overall.png")
-    plt.savefig(out_fig_path, dpi=300, bbox_inches="tight", format="png")
-    plt.show()
-    print(f"Figure saved to: {out_fig_path}")
 
 ###############################################################################
 #                                                                             #
