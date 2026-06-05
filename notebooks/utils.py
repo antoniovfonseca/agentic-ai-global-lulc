@@ -644,7 +644,7 @@ def export_global_change_frequency_tasks(
             f"{year}-01-01",
             f"{year}-12-31",
         ).mosaic().select(
-            utils.GLANCE_CLASS_BAND,
+            GLANCE_CLASS_BAND,
         )
         images.append(
             img,
