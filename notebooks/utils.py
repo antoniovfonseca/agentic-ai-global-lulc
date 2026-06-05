@@ -325,13 +325,6 @@ def plot_pixel_counts_bar_chart(
     output_dir : str
         Directory path where the output plot will be saved.
     """
-    import os
-    import glob
-    import re
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as ticker
 
     # 1. Read and aggregate GEE CSVs
     csv_pattern = os.path.join(input_dir, "*.csv")
@@ -762,12 +755,6 @@ def export_global_change_frequency_tasks(
 # 5.1 PLOT NUMBER OF CHANGES DURING TIME INTERVALS
 # ---------------------------------------------------------------------------
 
-import os
-import glob
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-
 def plot_global_change_frequency_bar_chart(
     input_dir: str,
     output_dir: str,
@@ -1102,14 +1089,6 @@ def plot_global_change_frequency_bar_chart(
 # 5.2 PLOT NUMBER OF CHANGES OVERALL
 # ---------------------------------------------------------------------------
 
-import os
-import glob
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-from matplotlib.patches import Patch
-
 def plot_number_of_changes_distribution(
     input_dir: str,
     output_dir: str,
@@ -1443,8 +1422,6 @@ def plot_number_of_changes_distribution(
 # 5.3 EXPORT NUMBER OF CHANGES RASTER
 # ---------------------------------------------------------------------------
 
-import ee
-
 def export_global_number_of_changes_raster_task(
     year_list: list[int],
     drive_folder: str,
@@ -1529,17 +1506,7 @@ def export_global_number_of_changes_raster_task(
 # ---------------------------------------------------------------------------
 # 5.4 PLOT NUMBER OF CHANGES MAP
 # ---------------------------------------------------------------------------
-import os
-import glob
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-from matplotlib.colors import ListedColormap, BoundaryNorm
-from matplotlib.patches import Patch
-from matplotlib.ticker import FuncFormatter
-import rasterio
-from pyproj import Transformer, Geod
-from matplotlib_scalebar.scalebar import ScaleBar
+
 
 # 1. Provide a stub for north_arrow if not defined
 def north_arrow(
@@ -1566,21 +1533,6 @@ def north_arrow(
         Scale of the arrow.
     """
     pass
-
-from pyproj import Geod
-
-import os
-import glob
-import numpy as np
-import matplotlib.pyplot as plt
-import rasterio
-from pyproj import Transformer, Geod
-from matplotlib.colors import ListedColormap, BoundaryNorm
-from matplotlib.patches import Patch
-import matplotlib.ticker as mticker
-from matplotlib.ticker import FuncFormatter
-from matplotlib_scalebar.scalebar import ScaleBar
-# Make sure north_arrow is imported/defined elsewhere in your utils.py
 
 def compute_display_pixel_size_km(
     raster_path: str,
@@ -1833,6 +1785,205 @@ def plot_number_of_changes_map(
 #                  5. TRAJECTORY ANALYSIS                                     #
 #                                                                             #
 ###############################################################################
+
+# ---------------------------------------------------------------------------
+# 5.1 EXPORT TRAJECTORY RASTER
+# ---------------------------------------------------------------------------
+def export_trajectory_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int,
+    collection_id: str,
+    band_name: str,
+    nodata_val: int,
+) -> ee.batch.Task:
+    """
+    Generate the trajectory raster and submit an export task to Google Earth Engine.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years to process.
+    drive_folder : str
+        The destination folder in Google Drive.
+    scale : int
+        The spatial resolution for the export in meters.
+    collection_id : str
+        The GEE ImageCollection ID.
+    band_name : str
+        The band name to select.
+    nodata_val : int
+        The NoData value to mask out.
+
+    Returns
+    -------
+    ee.batch.Task
+        The submitted Earth Engine task object.
+    """
+    # 1. Build the image stack
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
+
+    # 2. Generate the trajectory classification image
+    trajectory_image = calculate_trajectory_gee(
+        image_stack,
+        band_names,
+    )
+
+    # 3. Apply NoData unmasking to match the project's standard
+    trajectory_image = trajectory_image.unmask(nodata_val).toUint8()
+
+    # 4. Define a global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None,
+        False,
+    )
+
+    # 5. Define the Earth Engine export task
+    task_desc = f"Trajectory_Analysis_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.image.toDrive(
+        image=trajectory_image,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=global_region,
+        maxPixels=1e13,
+    )
+
+    # 6. Start the export task
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
+
+    return task
+
+
+# ---------------------------------------------------------------------------
+# 5.2 EXPORT TRAJECTORY DURING INTERVALS
+# ---------------------------------------------------------------------------
+def export_trajectory_intervals_csv_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+) -> ee.batch.Task:
+    """
+    Compute trajectory interval contributions using GEE and export to CSV.
+    Returns pixel counts instead of area.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years to process.
+    drive_folder : str
+        The destination folder in Google Drive.
+    scale : int, optional
+        The spatial resolution for the export in meters. Default is 300.
+        
+    Returns
+    -------
+    ee.batch.Task
+        The submitted Earth Engine task object.
+    """
+    # 1. Build the stack (returns the image stack and band names)
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE
+    )
+    
+    # 2. Calculate trajectory
+    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
+
+    # 3. Filter valid trajectories (we only care about 2, 3, 4, 5)
+    valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
+    trajectory_image = trajectory_image.updateMask(valid_traj_mask)
+
+    # 4. Define a global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None, 
+        False,
+    )
+
+    # 5. Process each interval using GEE server-side mapping
+    length = len(year_list)
+    indices = ee.List.sequence(0, length - 2)
+
+    def process_interval(idx):
+        idx = ee.Number(idx)
+        b_names = ee.List(band_names)
+
+        # Get current and next band names
+        b1_name = ee.String(b_names.get(idx))
+        b2_name = ee.String(b_names.get(idx.add(1)))
+
+        # Select the images for the interval
+        img1 = image_stack.select(b1_name)
+        img2 = image_stack.select(b2_name)
+
+        # Identify changes between t and t+1
+        change_mask = img1.neq(img2)
+
+        # Mask the trajectory image with the changes in this specific interval
+        traj_for_interval = trajectory_image.updateMask(change_mask)
+
+        # Compute frequency histogram of trajectory classes (which gives PIXEL COUNTS)
+        hist = traj_for_interval.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=global_region,
+            scale=scale,
+            maxPixels=1e13,
+            tileScale=16,
+        ).get('trajectory')
+
+        # Handle potential null returns if there are no changes
+        hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
+
+        # Format interval label (e.g., "2001-2010")
+        y_list = ee.List(year_list)
+        y_start = ee.Number(y_list.get(idx)).format('%d')
+        y_end = ee.Number(y_list.get(idx.add(1))).format('%d')
+        interval_label = y_start.cat('-').cat(y_end)
+
+        # Return as Feature (row for the CSV)
+        return ee.Feature(None, {
+            'Interval': interval_label,
+            '2': ee.Number(hist_dict.get('2', 0)),
+            '3': ee.Number(hist_dict.get('3', 0)),
+            '4': ee.Number(hist_dict.get('4', 0)),
+            '5': ee.Number(hist_dict.get('5', 0)),
+        })
+
+    # 6. Map over the intervals
+    features = ee.FeatureCollection(indices.map(process_interval))
+
+    # 7. Prepare the CSV Export task
+    y_start = str(year_list[0])
+    y_end = str(year_list[-1])
+    task_desc = f"Trajectory_Contributions_{y_start}_{y_end}"
+    
+    task = ee.batch.Export.table.toDrive(
+        collection=features,
+        description=task_desc,
+        folder=drive_folder,
+        fileNamePrefix=task_desc,
+        fileFormat="CSV"
+    )
+
+    # 8. Start the task
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
+    
+    return task
+
+# ---------------------------------------------------------------------------
+# 5.3 PLOT TRAJECTORY DURING INTERVALS
+# ---------------------------------------------------------------------------
 def plot_trajectory_contributions(
     df: pd.DataFrame,
     output_path: str,
@@ -1958,121 +2109,9 @@ def plot_trajectory_contributions(
 
     print(f"Figure saved to: {output_fig}")
 
-def export_trajectory_intervals_csv_gee(
-    year_list: list,
-    drive_folder: str,
-    scale: int = 300,
-) -> ee.batch.Task:
-    """
-    Compute trajectory interval contributions using GEE and export to CSV.
-    Returns pixel counts instead of area.
-
-    Parameters
-    ----------
-    year_list : list
-        List of integer years to process.
-    drive_folder : str
-        The destination folder in Google Drive.
-    scale : int, optional
-        The spatial resolution for the export in meters. Default is 300.
-        
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine task object.
-    """
-    # 1. Build the stack (returns the image stack and band names)
-    image_stack, band_names = build_glance_stack(
-        year_list=year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=NODATA_VALUE
-    )
-    
-    # 2. Calculate trajectory
-    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
-
-    # 3. Filter valid trajectories (we only care about 2, 3, 4, 5)
-    valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
-    trajectory_image = trajectory_image.updateMask(valid_traj_mask)
-
-    # 4. Define a global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None, 
-        False,
-    )
-
-    # 5. Process each interval using GEE server-side mapping
-    length = len(year_list)
-    indices = ee.List.sequence(0, length - 2)
-
-    def process_interval(idx):
-        idx = ee.Number(idx)
-        b_names = ee.List(band_names)
-
-        # Get current and next band names
-        b1_name = ee.String(b_names.get(idx))
-        b2_name = ee.String(b_names.get(idx.add(1)))
-
-        # Select the images for the interval
-        img1 = image_stack.select(b1_name)
-        img2 = image_stack.select(b2_name)
-
-        # Identify changes between t and t+1
-        change_mask = img1.neq(img2)
-
-        # Mask the trajectory image with the changes in this specific interval
-        traj_for_interval = trajectory_image.updateMask(change_mask)
-
-        # Compute frequency histogram of trajectory classes (which gives PIXEL COUNTS)
-        hist = traj_for_interval.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
-            geometry=global_region,
-            scale=scale,
-            maxPixels=1e13,
-            tileScale=16,
-        ).get('trajectory')
-
-        # Handle potential null returns if there are no changes
-        hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
-
-        # Format interval label (e.g., "2001-2010")
-        y_list = ee.List(year_list)
-        y_start = ee.Number(y_list.get(idx)).format('%d')
-        y_end = ee.Number(y_list.get(idx.add(1))).format('%d')
-        interval_label = y_start.cat('-').cat(y_end)
-
-        # Return as Feature (row for the CSV)
-        return ee.Feature(None, {
-            'Interval': interval_label,
-            '2': ee.Number(hist_dict.get('2', 0)),
-            '3': ee.Number(hist_dict.get('3', 0)),
-            '4': ee.Number(hist_dict.get('4', 0)),
-            '5': ee.Number(hist_dict.get('5', 0)),
-        })
-
-    # 6. Map over the intervals
-    features = ee.FeatureCollection(indices.map(process_interval))
-
-    # 7. Prepare the CSV Export task
-    y_start = str(year_list[0])
-    y_end = str(year_list[-1])
-    task_desc = f"Trajectory_Contributions_{y_start}_{y_end}"
-    
-    task = ee.batch.Export.table.toDrive(
-        collection=features,
-        description=task_desc,
-        folder=drive_folder,
-        fileNamePrefix=task_desc,
-        fileFormat="CSV"
-    )
-
-    # 8. Start the task
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
-    
-    return task
+# ---------------------------------------------------------------------------
+# 5.4 EXPORT TRAJECTORY OVERALL
+# ---------------------------------------------------------------------------
 
 def export_trajectory_overall_csv_gee(
     year_list: list,
@@ -2162,6 +2201,10 @@ def export_trajectory_overall_csv_gee(
     
     return task
 
+
+# ---------------------------------------------------------------------------
+# 5.5 PLOT TRAJECTORY MAP
+# ---------------------------------------------------------------------------
 def plot_trajectory_map(
     output_dir: str,
     vrt_filename: str = "merged_trajectory.vrt",
@@ -2367,88 +2410,7 @@ def plot_trajectory_map(
     plt.show()
     print(f"Map figure saved successfully to: {output_figure_path}")
 
-def export_alternation_shift_task_gee(
-    year_list: list,
-    drive_folder: str,
-    scale: int = 300,
-    nodata_val: int = NODATA_VALUE,
-) -> ee.batch.Task:
-    """
-    Compute and export a raster representing the Alternation Shift Component using GEE.
-    Calculated as: Total Changes - Quantity (Extension) - Total Exchange.
-    """
-    print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Fetch all images in the time series
-    imgs = []
-    for y in year_list:
-        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-            ee.Filter.calendarRange(y, y, 'year')
-        ).select(GLANCE_CLASS_BAND).mosaic()
-        img = img.updateMask(img.neq(nodata_val))
-        imgs.append(img)
-
-    # 2. Calculate Total Changes across all intervals
-    total_changes = ee.Image(0).toUint8()
-    for t in range(len(imgs) - 1):
-        change = imgs[t].neq(imgs[t+1])
-        total_changes = total_changes.add(change)
-
-    # 3. Calculate Quantity Component (start != end)
-    quantity = imgs[0].neq(imgs[-1]).toUint8()
-
-    # 4. Calculate Total Exchange
-    classes = list(GLANCE_METADATA.keys())
-    total_exchange = ee.Image(0).toUint8()
-
-    for i in range(len(classes)):
-        for j in range(i + 1, len(classes)):
-            class_a = classes[i]
-            class_b = classes[j]
-
-            count_a_b = ee.Image(0)
-            count_b_a = ee.Image(0)
-
-            for t in range(len(imgs) - 1):
-                img_t = imgs[t]
-                img_t1 = imgs[t+1]
-
-                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
-                count_a_b = count_a_b.add(trans_a_b)
-
-                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
-                count_b_a = count_b_a.add(trans_b_a)
-
-            pair_exchange = count_a_b.min(count_b_a).multiply(2)
-            total_exchange = total_exchange.add(pair_exchange)
-
-    # 5. Calculate Alternation Shift (Changes - Quantity - Exchange)
-    # .max(0) ensures no negative values if discrepancies arise
-    shift = total_changes.subtract(quantity).subtract(total_exchange).max(0).toUint8()
-
-    # 6. Apply NoData and set properties
-    shift = shift.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
-
-    # 7. Define global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None, False
-    )
-
-    # 8. Define and start the Earth Engine export task
-    task_desc = f"Alternation_Shift_{year_list[0]}_{year_list[-1]}"
-    task = ee.batch.Export.image.toDrive(
-        image=shift,
-        description=task_desc,
-        folder=drive_folder,
-        scale=scale,
-        region=global_region,
-        maxPixels=1e13,
-    )
-
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
-    return task
 ###############################################################################
 #                                                                             #
 #                  5. TRANSITION MATRIX                                       #
@@ -2577,77 +2539,7 @@ def build_glance_stack(
     return stack, b_names
 
 
-def export_trajectory_task_gee(
-    year_list: list,
-    drive_folder: str,
-    scale: int,
-    collection_id: str,
-    band_name: str,
-    nodata_val: int,
-) -> ee.batch.Task:
-    """
-    Generate the trajectory raster and submit an export task to Google Earth Engine.
 
-    Parameters
-    ----------
-    year_list : list
-        List of integer years to process.
-    drive_folder : str
-        The destination folder in Google Drive.
-    scale : int
-        The spatial resolution for the export in meters.
-    collection_id : str
-        The GEE ImageCollection ID.
-    band_name : str
-        The band name to select.
-    nodata_val : int
-        The NoData value to mask out.
-
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine task object.
-    """
-    # 1. Build the image stack
-    image_stack, band_names = build_glance_stack(
-        year_list=year_list,
-        collection_id=collection_id,
-        band_name=band_name,
-        nodata_val=nodata_val,
-    )
-
-    # 2. Generate the trajectory classification image
-    trajectory_image = calculate_trajectory_gee(
-        image_stack,
-        band_names,
-    )
-
-    # 3. Apply NoData unmasking to match the project's standard
-    trajectory_image = trajectory_image.unmask(nodata_val).toUint8()
-
-    # 4. Define a global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None,
-        False,
-    )
-
-    # 5. Define the Earth Engine export task
-    task_desc = f"Trajectory_Analysis_{year_list[0]}_{year_list[-1]}"
-    task = ee.batch.Export.image.toDrive(
-        image=trajectory_image,
-        description=task_desc,
-        folder=drive_folder,
-        scale=scale,
-        region=global_region,
-        maxPixels=1e13,
-    )
-
-    # 6. Start the export task
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
-
-    return task
 
 def plot_trajectory_contributions(
     df: pd.DataFrame,
@@ -5278,6 +5170,89 @@ def plot_alternation_exchange_map(
     )
     plt.show()
     print(f"Map figure saved successfully to: {output_figure_path}")
+
+def export_alternation_shift_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = NODATA_VALUE,
+) -> ee.batch.Task:
+    """
+    Compute and export a raster representing the Alternation Shift Component using GEE.
+    Calculated as: Total Changes - Quantity (Extension) - Total Exchange.
+    """
+    print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
+
+    # 1. Fetch all images in the time series
+    imgs = []
+    for y in year_list:
+        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+            ee.Filter.calendarRange(y, y, 'year')
+        ).select(GLANCE_CLASS_BAND).mosaic()
+        img = img.updateMask(img.neq(nodata_val))
+        imgs.append(img)
+
+    # 2. Calculate Total Changes across all intervals
+    total_changes = ee.Image(0).toUint8()
+    for t in range(len(imgs) - 1):
+        change = imgs[t].neq(imgs[t+1])
+        total_changes = total_changes.add(change)
+
+    # 3. Calculate Quantity Component (start != end)
+    quantity = imgs[0].neq(imgs[-1]).toUint8()
+
+    # 4. Calculate Total Exchange
+    classes = list(GLANCE_METADATA.keys())
+    total_exchange = ee.Image(0).toUint8()
+
+    for i in range(len(classes)):
+        for j in range(i + 1, len(classes)):
+            class_a = classes[i]
+            class_b = classes[j]
+
+            count_a_b = ee.Image(0)
+            count_b_a = ee.Image(0)
+
+            for t in range(len(imgs) - 1):
+                img_t = imgs[t]
+                img_t1 = imgs[t+1]
+
+                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
+                count_a_b = count_a_b.add(trans_a_b)
+
+                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
+                count_b_a = count_b_a.add(trans_b_a)
+
+            pair_exchange = count_a_b.min(count_b_a).multiply(2)
+            total_exchange = total_exchange.add(pair_exchange)
+
+    # 5. Calculate Alternation Shift (Changes - Quantity - Exchange)
+    # .max(0) ensures no negative values if discrepancies arise
+    shift = total_changes.subtract(quantity).subtract(total_exchange).max(0).toUint8()
+
+    # 6. Apply NoData and set properties
+    shift = shift.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
+
+    # 7. Define global bounding box for the export
+    global_region = ee.Geometry.Polygon(
+        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
+        None, False
+    )
+
+    # 8. Define and start the Earth Engine export task
+    task_desc = f"Alternation_Shift_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.image.toDrive(
+        image=shift,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=global_region,
+        maxPixels=1e13,
+    )
+
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
+    return task
 
 def plot_alternation_shift_map(
     output_dir: str,
