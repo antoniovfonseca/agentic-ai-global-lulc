@@ -35,6 +35,11 @@ DEFAULT_OUTPUT_DIR = "/content/glance_data/output"
 NODATA_VALUE = 255
 GLANCE_COLLECTION_ID = "projects/GLANCE/DATASETS/V001"
 GLANCE_CLASS_BAND = "LC"
+GLOBAL_GEOM = ee.Geometry.Rectangle(
+    [-180, -90, 180, 90],
+    "EPSG:4326",
+    False,
+)
 
 # 3. Class Metadata
 GLANCE_METADATA = {
@@ -132,7 +137,11 @@ def get_glance_map(year):
         glance_layer = image.select(GLANCE_CLASS_BAND)
 
         # 4. Add Layer to Map
-        m.addLayer(glance_layer, vis_params, f"GLANCE LC {year}")
+        m.addLayer(
+            glance_layer,
+            vis_params, 
+            f"GLANCE LC {year}"
+        )
         
         # 5. Dynamic Legend construction
         # Creates a dictionary 'Name': 'Color' for the legend
@@ -141,7 +150,10 @@ def get_glance_map(year):
             for meta in GLANCE_METADATA.values()
         }
         
-        m.add_legend(title="GLANCE Land Cover", legend_dict=legend_dict)
+        m.add_legend(
+            title="GLANCE Land Cover",
+            legend_dict=legend_dict
+        )
         
         return m
 
@@ -174,7 +186,10 @@ def view_local_rasters(input_dir=DEFAULT_INPUT_DIR):
     m = geemap.Map()
     
     # 2. Search for files
-    search_pattern = os.path.join(input_dir, "*.tif")
+    search_pattern = os.path.join(
+        input_dir,
+        "*.tif"
+    )
     files = sorted(glob.glob(search_pattern))
     
     if not files:
@@ -199,7 +214,7 @@ def view_local_rasters(input_dir=DEFAULT_INPUT_DIR):
             m.add_raster(
                 filepath, 
                 layer_name=layer_name, 
-                palette=palette,  # Tries to apply the specific class colors
+                palette=palette,
                 nodata=NODATA_VALUE
             )
         except Exception as e:
@@ -210,7 +225,10 @@ def view_local_rasters(input_dir=DEFAULT_INPUT_DIR):
         meta['name']: meta['color'] 
         for meta in GLANCE_METADATA.values()
     }
-    m.add_legend(title="Classes", legend_dict=legend_dict)
+    m.add_legend(
+        title="Classes",
+        legend_dict=legend_dict
+    )
 
     return m
 
@@ -250,43 +268,36 @@ def export_global_pixel_counts_tasks(
     list of ee.batch.Task
         A list containing all the triggered Earth Engine tasks.
     """
-    # 1. Define global bounding box geometry
-    global_geom = ee.Geometry.Polygon(
-        [[[-180, -90], [180, -90], [180, 90], [-180, 90]]],
-        None,
-        False
-    )
-
-    # 2. Access the GLANCE collection using global constants defined in utils.py
+    # 1. Access the GLANCE collection using global constants defined in utils.py
     glance_collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
 
-    # 3. Initialize an empty list to store the tasks
+    # 2. Initialize an empty list to store the tasks
     tasks_list = []
 
-    # 4. Iterate over the provided list of years
+    # 3. Iterate over the provided list of years
     for year in year_list:
-        # 5. Filter the collection for the specific year
+        # 4. Filter the collection for the specific year
         image_year = glance_collection.filter(
             ee.Filter.calendarRange(year, year, 'year')
         ).mosaic()
 
-        # 6. Calculate the frequency histogram
+        # 5. Calculate the frequency histogram
         # Note: tileScale=16 is used to avoid memory limit errors in global reductions
         histogram = image_year.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
-            geometry=global_geom,
+            geometry=GLOBAL_GEOM,
             scale=scale,
             maxPixels=max_pixels,
             tileScale=16
         )
 
-        # 7. Extract the dictionary and convert it to a FeatureCollection
+        # 6. Extract the dictionary and convert it to a FeatureCollection
         counts_dict = ee.Dictionary(histogram.get(GLANCE_CLASS_BAND))
         feature_collection = ee.FeatureCollection([
             ee.Feature(None, counts_dict)
         ])
 
-        # 8. Define the export task parameters
+        # 7. Define the export task parameters
         export_name = f"Pixel_Counts_LULC_{year}"
         task = ee.batch.Export.table.toDrive(
             collection=feature_collection,
@@ -295,12 +306,12 @@ def export_global_pixel_counts_tasks(
             fileFormat='CSV'
         )
 
-        # 9. Start the task and append it to the list
+        # 8. Start the task and append it to the list
         task.start()
         print(f"Task started: {export_name} (Scale: {scale}m)")
         tasks_list.append(task)
 
-    # 10. Return the list of triggered tasks
+    # 9. Return the list of triggered tasks
     return tasks_list
 
 # ---------------------------------------------------------------------------
@@ -361,7 +372,10 @@ def plot_pixel_counts_bar_chart(
         return
 
     # Create pivot table from aggregated data
-    pivot_pixels = pd.DataFrame.from_dict(yearly_data, orient='index').fillna(0)
+    pivot_pixels = pd.DataFrame.from_dict(
+        yearly_data,
+        orient='index'
+    ).fillna(0)
     pivot_pixels.sort_index(inplace=True)
     pivot_pixels.index.name = "Year"
 
@@ -443,10 +457,7 @@ def plot_pixel_counts_bar_chart(
 
     # 4. Generate the Stacked Bar Chart
     fig, ax = plt.subplots(
-        figsize=(
-            10,
-            6,
-        ),
+        figsize=(10,6),
     )
 
     x = np.arange(
@@ -623,14 +634,7 @@ def export_global_change_frequency_tasks(
     list
         List of triggered Earth Engine Task objects.
     """
-    # 1. Define global bounding box geometry
-    global_geom = ee.Geometry.Rectangle(
-        [-180,-90,180,90,],
-        'EPSG:4326',
-        False,
-    )
-
-    # 2. Extract images for all years
+    # 1. Extract images for all years
     images = []
     for year in year_list:
         img = ee.ImageCollection(
@@ -645,7 +649,7 @@ def export_global_change_frequency_tasks(
             img,
         )
 
-    # 3. Compute change images per interval
+    # 2. Compute change images per interval
     change_images = []
     n_intervals = len(
         year_list,
@@ -661,7 +665,7 @@ def export_global_change_frequency_tasks(
             i + 1
         ]
 
-        # 4. Binary change mapping (1 if changed, 0 otherwise)
+        # 3. Binary change mapping (1 if changed, 0 otherwise)
         change = img_curr.neq(
             img_next,
         ).rename(
@@ -671,7 +675,7 @@ def export_global_change_frequency_tasks(
             change,
         )
 
-    # 5. Compute total changes over the entire time series
+    # 4. Compute total changes over the entire time series
     # Summing all boolean change images
     total_changes = ee.ImageCollection(
         change_images,
@@ -681,7 +685,7 @@ def export_global_change_frequency_tasks(
 
     tasks_list = []
 
-    # 6. Generate an export task for each interval
+    # 5. Generate an export task for each interval
     for i in range(
         n_intervals,
     ):
@@ -693,7 +697,7 @@ def export_global_change_frequency_tasks(
         ]
         interval_label = f"{y_start}_{y_end}"
 
-        # 7. Mask total_changes to only pixels that changed in THIS interval
+        # 6. Mask total_changes to only pixels that changed in THIS interval
         interval_change_mask = change_images[
             i
         ]
@@ -701,16 +705,16 @@ def export_global_change_frequency_tasks(
             interval_change_mask,
         )
 
-        # 8. Reduce region to get the frequency histogram
+        # 7. Reduce region to get the frequency histogram
         histogram = masked_total.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
-            geometry=global_geom,
+            geometry=GLOBAL_GEOM,
             scale=scale,
             maxPixels=max_pixels,
             tileScale=16,
         )
 
-        # 9. Extract the dictionary and convert it to a FeatureCollection
+        # 8. Extract the dictionary and convert it to a FeatureCollection
         counts_dict = ee.Dictionary(
             histogram.get(
                 "total_changes",
@@ -726,7 +730,7 @@ def export_global_change_frequency_tasks(
             ]
         )
 
-        # 10. Define the export task parameters
+        # 9. Define the export task parameters
         export_name = f"Number_Change_{interval_label}"
         task = ee.batch.Export.table.toDrive(
             collection=feature_collection,
@@ -735,7 +739,7 @@ def export_global_change_frequency_tasks(
             fileFormat="CSV",
         )
 
-        # 11. Start the task and append it to the list
+        # 10. Start the task and append it to the list
         task.start()
         print(
             f"Task started: {export_name} (Scale: {scale}m)",
@@ -913,10 +917,7 @@ def plot_global_change_frequency_bar_chart(
 
     # 8. Setup Figure and Colors
     fig, ax = plt.subplots(
-        figsize=(
-            14,
-            6,
-        ),
+        figsize=(14,6),
     )
 
     n_cols = len(
@@ -1465,9 +1466,6 @@ def export_global_number_of_changes_raster_task(
         # Accumulate the changes
         change_count_img = change_count_img.add(has_changed)
 
-    # Retrieve global boundaries
-    world_geometry = ee.Geometry.BBox(-180, -90, 180, 90)
-
     # Mask the change_count_img using the extent of the original dataset to exclude oceans/voids
     valid_mask = collection.filter(ee.Filter.calendarRange(year_list[0], year_list[0], 'year')) \
                            .select(GLANCE_CLASS_BAND).mosaic().mask()
@@ -1487,7 +1485,7 @@ def export_global_number_of_changes_raster_task(
         description=task_name,
         folder=drive_folder,
         fileNamePrefix=task_name,
-        region=world_geometry,
+        region=GLOBAL_GEOM,
         scale=scale,
         maxPixels=1e13,
         crs="EPSG:4326",
@@ -1501,7 +1499,6 @@ def export_global_number_of_changes_raster_task(
 # ---------------------------------------------------------------------------
 # 5.4 PLOT NUMBER OF CHANGES MAP
 # ---------------------------------------------------------------------------
-
 
 # 1. Provide a stub for north_arrow if not defined
 def north_arrow(
@@ -1866,25 +1863,18 @@ def export_trajectory_task_gee(
     # 3. Apply NoData unmasking to match the project's standard
     trajectory_image = trajectory_image.unmask(nodata_val).toUint8()
 
-    # 4. Define a global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None,
-        False,
-    )
-
-    # 5. Define the Earth Engine export task
+    # 4. Define the Earth Engine export task
     task_desc = f"Trajectory_Analysis_{year_list[0]}_{year_list[-1]}"
     task = ee.batch.Export.image.toDrive(
         image=trajectory_image,
         description=task_desc,
         folder=drive_folder,
         scale=scale,
-        region=global_region,
+        region=GLOBAL_GEOM,
         maxPixels=1e13,
     )
 
-    # 6. Start the export task
+    # 5. Start the export task
     task.start()
     print(f"Task '{task_desc}' submitted to Google Earth Engine.")
 
@@ -1932,14 +1922,7 @@ def export_trajectory_intervals_csv_gee(
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
     trajectory_image = trajectory_image.updateMask(valid_traj_mask)
 
-    # 4. Define a global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None, 
-        False,
-    )
-
-    # 5. Process each interval using GEE server-side mapping
+    # 4. Process each interval using GEE server-side mapping
     length = len(year_list)
     indices = ee.List.sequence(0, length - 2)
 
@@ -1964,7 +1947,7 @@ def export_trajectory_intervals_csv_gee(
         # Compute frequency histogram of trajectory classes (which gives PIXEL COUNTS)
         hist = traj_for_interval.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
-            geometry=global_region,
+            geometry=GLOBAL_GEOM,
             scale=scale,
             maxPixels=1e13,
             tileScale=16,
@@ -1988,10 +1971,10 @@ def export_trajectory_intervals_csv_gee(
             '5': ee.Number(hist_dict.get('5', 0)),
         })
 
-    # 6. Map over the intervals
+    # 5. Map over the intervals
     features = ee.FeatureCollection(indices.map(process_interval))
 
-    # 7. Prepare the CSV Export task
+    # 6. Prepare the CSV Export task
     y_start = str(year_list[0])
     y_end = str(year_list[-1])
     task_desc = f"Trajectory_Contributions_{y_start}_{y_end}"
@@ -2004,7 +1987,7 @@ def export_trajectory_intervals_csv_gee(
         fileFormat="CSV"
     )
 
-    # 8. Start the task
+    # 7. Start the task
     task.start()
     print(f"Task '{task_desc}' submitted to Google Earth Engine.")
     
@@ -2204,17 +2187,10 @@ def export_trajectory_overall_csv_gee(
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
     trajectory_image = trajectory_image.updateMask(valid_traj_mask)
 
-    # 4. Define a global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None, 
-        False,
-    )
-
-    # 5. Compute frequency histogram of trajectory classes
+    # 4. Compute frequency histogram of trajectory classes
     hist = trajectory_image.reduceRegion(
         reducer=ee.Reducer.frequencyHistogram(),
-        geometry=global_region,
+        geometry=GLOBAL_GEOM,
         scale=scale,
         maxPixels=1e13,
         tileScale=16,
@@ -2223,7 +2199,7 @@ def export_trajectory_overall_csv_gee(
     # Handle potential null returns if there are no changes
     hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
 
-    # 6. Format into a Feature
+    # 5. Format into a Feature
     y_start = str(year_list[0])
     y_end = str(year_list[-1])
     period_label = f"{y_start}-{y_end}"
@@ -2238,7 +2214,7 @@ def export_trajectory_overall_csv_gee(
 
     fc = ee.FeatureCollection([feature])
 
-    # 7. Prepare the CSV Export task
+    # 6. Prepare the CSV Export task
     task_desc = f"Trajectory_Overall_{y_start}_{y_end}"
     
     task = ee.batch.Export.table.toDrive(
@@ -2249,7 +2225,7 @@ def export_trajectory_overall_csv_gee(
         fileFormat="CSV"
     )
 
-    # 8. Start the task
+    # 7. Start the task
     task.start()
     print(f"Task '{task_desc}' submitted to Google Earth Engine.")
     
@@ -2594,7 +2570,10 @@ def plot_trajectory_map(
     """
 
     # 1. Locate VRT
-    raster_path = os.path.join(output_dir, vrt_filename)
+    raster_path = os.path.join(
+        output_dir,
+        vrt_filename
+    )
     if not os.path.exists(raster_path):
         raise FileNotFoundError(f"Raster (VRT) not found: {raster_path}")
 
@@ -2618,7 +2597,10 @@ def plot_trajectory_map(
         )
 
         # Force masking using the provided nodata value
-        data = np.ma.masked_equal(data, nodata_val)
+        data = np.ma.masked_equal(
+            data,
+            nodata_val
+        )
 
         src_crs = src.crs
         # Adjust the affine transform for the new downsampled resolution
@@ -2629,7 +2611,10 @@ def plot_trajectory_map(
         height, width = data.shape
 
     # 4. Figure
-    fig, ax = plt.subplots(figsize=(20, 10), dpi=300)
+    fig, ax = plt.subplots(
+        figsize=(20, 10),
+        dpi=300
+    )
 
     # 5. Colormap
     cmap = ListedColormap(
@@ -2735,10 +2720,18 @@ def plot_trajectory_map(
         print("north_arrow function not found. Skipping north arrow.")
 
     # 9. Axes styling
-    ax.set_title("Trajectories", fontsize=18, pad=10)
+    ax.set_title(
+        "Trajectories",
+        fontsize=18, 
+        pad=10
+    )
     ax.set_aspect("equal")
 
-    to_latlon = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+    to_latlon = Transformer.from_crs(
+        src_crs,
+        "EPSG:4326",
+        always_xy=True
+    )
 
     def format_lon(x, pos):
         x = np.clip(x, 0, width - 1)
@@ -2758,13 +2751,31 @@ def plot_trajectory_map(
     ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
     ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
 
-    ax.tick_params(axis="both", which="major", labelsize=10, pad=4)
-    plt.setp(ax.get_yticklabels(), rotation=90, va="center")
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=10,
+        pad=4
+    )
+    plt.setp(
+        ax.get_yticklabels(),
+        rotation=90,
+        va="center"
+    )
 
     # 10. Save and Show
-    maps_dir = os.path.join(output_dir, "maps")
-    os.makedirs(maps_dir, exist_ok=True)
-    output_figure_path = os.path.join(maps_dir, "map_trajectories.png")
+    maps_dir = os.path.join(
+        output_dir,
+        "maps"
+    )
+    os.makedirs(
+        maps_dir,
+        exist_ok=True
+    )
+    output_figure_path = os.path.join(
+        maps_dir,
+        "map_trajectories.png"
+    )
 
     plt.savefig(
         output_figure_path,
@@ -2779,274 +2790,110 @@ def plot_trajectory_map(
 
 ###############################################################################
 #                                                                             #
-#                  5. TRANSITION MATRIX                                       #
-#                                                                             #
-###############################################################################
-def calculate_trajectory_gee(
-    image_stack: ee.Image,
-    band_names: list,
-) -> ee.Image:
-    """
-    Classify a single pixel trajectory into five categories based on mathematical logic using GEE.
-
-    Parameters
-    ----------
-    image_stack : ee.Image
-        An ee.Image where each band represents a chronological time step.
-    band_names : list
-        A list of strings representing the ordered band names in the stack.
-
-    Returns
-    -------
-    ee.Image
-        An ee.Image containing the classified trajectory codes (1 to 5).
-    """
-    # 1. Extract the start and end images from the stack
-    start_img = image_stack.select(band_names[0])
-    end_img = image_stack.select(band_names[-1])
-
-    # 2. Check if the start class equals the end class
-    start_equals_end = start_img.eq(end_img)
-
-    # 3. Verify if all intermediate values match the start value
-    all_match_start = image_stack.eq(start_img).reduce(ee.Reducer.min())
-
-    # 4. Assign Trajectory 1 for completely stable pixels
-    traj_1 = start_equals_end.And(all_match_start).multiply(1)
-
-    # 5. Assign Trajectory 2 for stable extent with alternation
-    traj_2 = start_equals_end.And(all_match_start.Not()).multiply(2)
-
-    # 6. Identify pixels with extent change
-    extent_change = start_equals_end.Not()
-
-    # 7. Initialize images to track direct transitions and path changes
-    has_direct_transition = ee.Image(0)
-    path_changes = ee.Image(0)
-
-    length = len(band_names)
-
-    # 8. Iterate over the time steps to evaluate transitions
-    for i in range(length - 1):
-        current_band = image_stack.select(band_names[i])
-        next_band = image_stack.select(band_names[i + 1])
-
-        # 9. Check for a direct transition from start to end class
-        is_direct = current_band.eq(start_img).And(next_band.eq(end_img))
-        has_direct_transition = has_direct_transition.Or(is_direct)
-
-        # 10. Increment path changes when the class changes between steps
-        is_change = current_band.neq(next_band)
-        path_changes = path_changes.add(is_change)
-
-    # 11. Assign Trajectory 5 for extent change without direct transition
-    traj_5 = extent_change.And(has_direct_transition.Not()).multiply(5)
-
-    # 12. Assign Trajectory 3 for extent change without alternation
-    traj_3 = extent_change.And(has_direct_transition).And(path_changes.eq(1)).multiply(3)
-
-    # 13. Assign Trajectory 4 for extent change with alternation
-    traj_4 = extent_change.And(has_direct_transition).And(path_changes.gt(1)).multiply(4)
-
-    # 14. Combine all trajectory maps into a single output image
-    trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
-
-    return trajectory_image.rename('trajectory')
-
-
-def build_glance_stack(
-    year_list: list,
-    collection_id: str,
-    band_name: str,
-    nodata_val: int,
-) -> tuple:
-    """
-    Build an Earth Engine image stack from the specified collection,
-    masking out NoData values.
-
-    Parameters
-    ----------
-    year_list : list
-        List of integer years to process.
-    collection_id : str
-        The GEE ImageCollection ID.
-    band_name : str
-        The band name to select.
-    nodata_val : int
-        The NoData value to mask out.
-
-    Returns
-    -------
-    tuple
-        A tuple containing the ee.Image stack and the list of band names.
-    """
-    # 1. Initialize lists for image bands and names
-    images = []
-    b_names = []
-
-    # 2. Loop through the requested years
-    for year in year_list:
-        b_name = f"y{year}"
-        b_names.append(b_name)
-
-        # 3. Retrieve the image for the specific year
-        img = ee.ImageCollection(collection_id).filter(
-            ee.Filter.calendarRange(year, year, 'year')
-        ).select(band_name).mosaic()
-
-        # 4. Mask out the NoData value
-        img = img.updateMask(img.neq(nodata_val)).rename(b_name)
-
-        images.append(img)
-
-    # 5. Combine into a single multi-band image
-    stack = ee.Image(images)
-
-    return stack, b_names
-
-
-
-
-
-
-###############################################################################
-#                                                                             #
-#                  5.1 CHANGE COMPONENTS                                      #
+#                  6. CHANGE COMPONENT ANALYSIS                               #
 #                                                                             #
 ###############################################################################
 
-import ee
+# ---------------------------------------------------------------------------
+# 6.1 COMPUTE TRANSITION MATRICES
+# ---------------------------------------------------------------------------
 
-def export_interval_transition_matrices_gee(
-    year_list: list,
-    drive_folder: str,
-    collection_id: str,
-    band_name: str,
-    scale: int = 300,
-    nodata_val: int = 255,
-) -> list:
+def export_global_transition_tasks(
+    year_list,
+    drive_folder="GLANCE_Transitions",
+    scale=30
+):
     """
-    Export LULC transition matrices between consecutive years to Google Drive.
+    Triggers asynchronous GEE tasks to export global transition matrices.
+
+    Each task computes a frequency histogram for a year pair and saves 
+    the result as a CSV file in a specific Google Drive folder.
 
     Parameters
     ----------
-    year_list : list
-        List of years representing the timeline.
-    drive_folder : str
-        Google Drive folder name for the exported CSV files.
-    collection_id : str
-        GEE ImageCollection ID containing the LULC rasters.
-    band_name : str
-        Band name representing the LULC classes.
+    year_list : list of int
+        List of years to process (e.g., [2001, 2010, 2019]).
+    drive_folder : str, optional
+        Name of the folder in Google Drive to save the CSVs. 
+        Defaults to "GLANCE_Transitions".
     scale : int, optional
-        Spatial resolution for the export, by default 300.
-    nodata_val : int, optional
-        Value representing NoData/Background to be masked out, by default 255.
+        Spatial resolution in meters. Use 30 for native resolution. 
+        Defaults to 30.
 
     Returns
     -------
-    list
-        List of submitted ee.batch.Task objects.
+    list of ee.batch.Task
+        A list of triggered Earth Engine Task objects for monitoring.
     """
-    tasks = []
-    collection = ee.ImageCollection(collection_id)
+    # 1. Define transition pairs (consecutive intervals)
+    pairs = [
+        (year_list[i], year_list[i+1]) 
+        for i in range(len(year_list) - 1)
+    ]
     
-    for i in range(len(year_list) - 1):
-        start_year = year_list[i]
-        end_year = year_list[i + 1]
-        
-        # 1. Filter and extract the LULC images for the specific years
-        img_start = collection.filter(ee.Filter.calendarRange(start_year, start_year, 'year')).first().select(band_name)
-        img_end = collection.filter(ee.Filter.calendarRange(end_year, end_year, 'year')).first().select(band_name)
-        
-        # 2. Mask NoData values
-        img_start = img_start.updateMask(img_start.neq(nodata_val))
-        img_end = img_end.updateMask(img_end.neq(nodata_val))
-        
-        # 3. Create a transition image (StartClass * 100 + EndClass)
-        transition_img = img_start.multiply(100).add(img_end).rename('transition')
-        
-        # 4. Compute the frequency histogram over the globe
-        # Using a global geometry to get the transition matrix
-        histogram = transition_img.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
-            geometry=ee.Geometry.Polygon([-180, -90, 180, 90], None, False),
-            scale=scale,
-            maxPixels=1e13,
-            tileScale=16
+    # 2. Add long-term transition pair (First Year to Last Year)
+    if len(year_list) > 2:
+        pairs.append(
+            (year_list[0], year_list[-1])
         )
+    
+    triggered_tasks = []
+
+    # 3. Iterate through each pair to define and start export tasks
+    for y1, y2 in pairs:
+        label = f"transition_{y1}_{y2}"
         
-        # 5. Create a FeatureCollection with a single feature to hold the dictionary
-        feature = ee.Feature(None, histogram)
+        # 4. Filter and mosaic images for the start and end years
+        img_start = collection.filterDate(
+            f"{y1}-01-01", 
+            f"{y1}-12-31"
+        ).mosaic().select(GLANCE_CLASS_BAND)
+        
+        img_end = collection.filterDate(
+            f"{y2}-01-01", 
+            f"{y2}-12-31"
+        ).mosaic().select(GLANCE_CLASS_BAND)
+
+        # 5. Create transition image: (Start * 100) + End
+        transition_image = img_start.multiply(100).add(img_end)
+
+        # 6. Reduce the image to a frequency histogram (Table format)
+        # Using a Feature to wrap the result for CSV export
+        transition_stats = transition_image.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=GLOBAL_GEOM,
+            scale=scale,
+            maxPixels=1e13
+        )
+
+        # 7. Create a feature collection with the statistics for export
+        feature = ee.Feature(None, transition_stats)
         fc = ee.FeatureCollection([feature])
-        
-        # 6. Configure and start the export task
-        task_name = f"transition_{start_year}_{end_year}"
+
+        # 8. Configure the Batch Export Task to Google Drive
         task = ee.batch.Export.table.toDrive(
             collection=fc,
-            description=task_name,
+            description=label,
             folder=drive_folder,
-            fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
-            fileFormat="CSV"
+            fileNamePrefix=label,
+            fileFormat='CSV'
         )
+
+        # 9. Start the task on the server and store the object
         task.start()
-        tasks.append(task)
-        print(f"Task started for transition {start_year}-{end_year} (Scale: {scale}m)")
-        
-    return tasks
+        triggered_tasks.append(task)
+        print(f"Task started for {label} (Scale: {scale}m)")
 
-import os
-import pandas as pd
-import numpy as np
+    return triggered_tasks
 
-def parse_gee_raw_csv(file_path: str) -> pd.DataFrame:
-    """
-    Parse a raw GEE transition CSV into a square Pandas DataFrame matrix.
-    """
-    df_raw = pd.read_csv(file_path)
-    dict_str = None
-    for col in df_raw.columns:
-        val = str(df_raw[col].iloc[0])
-        if val.startswith("{") and "=" in val:
-            dict_str = val
-            break
+# ---------------------------------------------------------------------------
+# 6.2 COMPUTE AGGREGATION MATRICES
+# ---------------------------------------------------------------------------
 
-    if not dict_str:
-        raise ValueError(f"Raw GEE dictionary string not found in {file_path}.")
-
-    dict_str = dict_str.strip("{}")
-    pairs = dict_str.split(", ")
-
-    transitions = {}
-    classes = set()
-
-    for pair in pairs:
-        if not pair:
-            continue
-        k, v = pair.split("=")
-        k_int = int(k)
-        val_float = float(v)
-        # For GLanCE, transition classes are encoded as start * 100 + end
-        s_c = k_int // 100
-        e_c = k_int % 100
-        transitions[(s_c, e_c)] = val_float
-        classes.add(s_c)
-        classes.add(e_c)
-
-    classes_sorted = sorted(list(classes))
-    df_mat = pd.DataFrame(0.0, index=classes_sorted, columns=classes_sorted)
-
-    for (s, e), v in transitions.items():
-        df_mat.at[s, e] = v
-
-    return df_mat
-
-import os
-import numpy as np
-import pandas as pd
-from typing import List
-
-def calculate_aggregated_components_csv(year_list: List[int], input_dir: str, output_dir: str) -> None:
+def calculate_aggregated_components_csv(
+        year_list: List[int],
+        input_dir: str,
+        output_dir: str) -> None:
     """
     Calculate Sum, Extent, Allocation, and Alternation matrices algebraically 
     from raw GEE pixel transition CSVs.
@@ -3069,7 +2916,10 @@ def calculate_aggregated_components_csv(year_list: List[int], input_dir: str, ou
     sum_matrix = None
     for i in range(len(year_list) - 1):
         y1, y2 = year_list[i], year_list[i+1]
-        interval_file = os.path.join(input_dir, f"transition_{y1}_{y2}.csv")
+        interval_file = os.path.join(
+            input_dir,
+            f"transition_{y1}_{y2}.csv"
+        )
         
         if not os.path.exists(interval_file):
             raise FileNotFoundError(f"Missing interval file: {interval_file}")
@@ -3079,25 +2929,44 @@ def calculate_aggregated_components_csv(year_list: List[int], input_dir: str, ou
         if sum_matrix is None:
             sum_matrix = df_interval
         else:
-            sum_matrix = sum_matrix.add(df_interval, fill_value=0.0)
+            sum_matrix = sum_matrix.add(
+                df_interval,
+                fill_value=0.0
+            )
             
     # 2. Load Extent Matrix (Overall Transition)
     print("Loading Extent Matrix...")
-    extent_file = os.path.join(input_dir, f"transition_{y_start}_{y_end}.csv")
+    extent_file = os.path.join(
+        input_dir,
+        f"transition_{y_start}_{y_end}.csv"
+    )
     if not os.path.exists(extent_file):
-        raise FileNotFoundError(f"Missing extent file: {extent_file}")
+        raise FileNotFoundError(
+            f"Missing extent file: {extent_file}"
+        )
         
     extent_matrix = parse_gee_raw_csv(extent_file)
     
     # Ensure indices match
     all_classes = sorted(list(set(sum_matrix.index) | set(extent_matrix.index)))
-    mat_sum = sum_matrix.reindex(index=all_classes, columns=all_classes, fill_value=0.0)
-    mat_ext = extent_matrix.reindex(index=all_classes, columns=all_classes, fill_value=0.0)
+    mat_sum = sum_matrix.reindex(
+        index=all_classes,
+        columns=all_classes,
+        fill_value=0.0
+    )
+    mat_ext = extent_matrix.reindex(
+        index=all_classes,
+        columns=all_classes,
+        fill_value=0.0
+    )
     
     # 3. Calculate all matrices based on original snippet logic
     # Allocation Exchange (mat_c)
     mat_c = pd.DataFrame(
-        np.minimum(mat_ext.values, mat_ext.values.T), 
+        np.minimum(
+            mat_ext.values,
+            mat_ext.values.T
+        ), 
         index=all_classes, 
         columns=all_classes
     )
@@ -3108,7 +2977,10 @@ def calculate_aggregated_components_csv(year_list: List[int], input_dir: str, ou
     # Alternation Exchange (mat_x)
     diff_m_e = mat_sum - mat_ext
     mat_x = pd.DataFrame(
-        np.maximum(0, np.minimum(diff_m_e.values, diff_m_e.values.T)), 
+        np.maximum(
+            0,
+            np.minimum(diff_m_e.values, diff_m_e.values.T)
+        ), 
         index=all_classes, 
         columns=all_classes
     )
@@ -3131,203 +3003,18 @@ def calculate_aggregated_components_csv(year_list: List[int], input_dir: str, ou
     
     for name, mat in aggregated_matrices.items():
         file_name = f"transition_matrix_{name}_{period_label}.csv"
-        out_csv_path = os.path.join(output_dir, file_name)
+        out_csv_path = os.path.join(
+            output_dir,
+            file_name
+        )
         mat.to_csv(out_csv_path)
         print(f"Saved {name} matrix: {out_csv_path}")
 
     print("\nAll aggregated component matrices successfully generated!")
 
-import os
-import re
-import numpy as np
-import pandas as pd
-from tqdm import tqdm
-
-
-class ComponentCalculator:
-    """
-    Compute change components for a matrix.
-
-    Supports pre-decomposed matrices via force_component parameter.
-    """
-
-    def __init__(self, transition_matrix: np.ndarray) -> None:
-        """
-        Initialize the calculator with a transition matrix.
-
-        Parameters
-        ----------
-        transition_matrix : np.ndarray
-            Square matrix representing transitions.
-        """
-        self.matrix = transition_matrix.astype(float)
-        self.num_classes = transition_matrix.shape[0]
-        self.class_components: list[dict] = []
-
-    def calculate_components(self, force_component: str = None) -> "ComponentCalculator":
-        """
-        Calculate gain, loss, exchange, and shift for all classes.
-
-        Parameters
-        ----------
-        force_component : str, optional
-            If set to "Exchange" or "Shift", forces the interpretation of the
-            matrix content to that specific component.
-
-        Returns
-        -------
-        ComponentCalculator
-            Returns self for chaining.
-        """
-        for class_idx in range(self.num_classes):
-            gain_sum = np.sum(self.matrix[:, class_idx])
-            loss_sum = np.sum(self.matrix[class_idx, :])
-
-            # Standard net change calculation
-            q_gain = max(0.0, gain_sum - loss_sum)
-            q_loss = max(0.0, loss_sum - gain_sum)
-
-            if force_component == "Exchange":
-                exchange = loss_sum - self.matrix[class_idx, class_idx]
-                shift = 0.0
-                q_gain, q_loss = gain_sum - loss_sum, loss_sum - gain_sum
-            elif force_component == "Shift":
-                exchange = 0.0
-                shift = loss_sum - self.matrix[class_idx, class_idx]
-                q_gain, q_loss = 0.0, 0.0
-            else:
-                # Standard Pontius decomposition
-                mutual = np.sum(np.minimum(self.matrix[class_idx, :], self.matrix[:, class_idx]))
-                exchange = mutual - self.matrix[class_idx, class_idx]
-                total_trans = loss_sum - self.matrix[class_idx, class_idx]
-                shift = total_trans - q_loss - exchange
-
-            self.class_components.append({
-                "Quantity_Gain": q_gain,
-                "Quantity_Loss": q_loss,
-                "Exchange_Gain": exchange,
-                "Exchange_Loss": exchange,
-                "Shift_Gain": shift,
-                "Shift_Loss": shift,
-            })
-        return self
-
-
-def _extract_year_str(val) -> str:
-    """
-    Extract the first sequence of digits from a year string or integer.
-
-    Parameters
-    ----------
-    val : str or int
-        The value containing the year (e.g., "time_2000" or 2000).
-
-    Returns
-    -------
-    str
-        The extracted year digits.
-    """
-    match = re.search(r"(\d+)", str(val))
-    return match.group(1) if match else str(val)
-
-
-def process_matrix(
-    matrix_type: str,
-    input_dir: str,
-    years_list: list,
-    class_labels_dict: dict,
-    start_year=None,
-    end_year=None,
-) -> list:
-    """
-    Search for a transition matrix file and calculate its change components.
-
-    Parameters
-    ----------
-    matrix_type : str
-        Type of matrix ("interval", "extent", "sum", etc.).
-    input_dir : str
-        Directory where CSV files are stored.
-    years_list : list
-        List of all years in the timeline.
-    class_labels_dict : dict
-        Dictionary mapping class IDs to metadata.
-    start_year : str or int, optional
-        Start year for interval matrices.
-    end_year : str or int, optional
-        End year for interval matrices.
-
-    Returns
-    -------
-    list[dict]
-        List of dictionaries containing component values per class.
-    """
-    results = []
-    patterns = []
-
-    # 1. Determine naming patterns to search for
-    if matrix_type == "interval":
-        s_str, e_str = str(start_year), str(end_year)
-        patterns.extend([
-            f"transition_{s_str}_{e_str}.csv",
-            f"transition_matrix_{s_str}-{e_str}.csv",
-        ])
-        label_time = f"{s_str}-{e_str}"
-    else:
-        y0_str, yN_str = str(years_list[0]), str(years_list[-1])
-        patterns.extend([
-            f"transition_matrix_{matrix_type}_{y0_str}-{yN_str}.csv",
-        ])
-        label_time = matrix_type
-
-    # 2. Find the existing file in the main directory
-    full_path = None
-    for p in patterns:
-        path = os.path.join(input_dir, p)
-        if os.path.exists(path):
-            full_path = path
-            break
-
-    if not full_path:
-        return []
-
-    # 3. Process components
-    force_comp = (
-        "Exchange" if "exchange" in matrix_type else ("Shift" if "shift" in matrix_type else None)
-    )
-
-    # Load matrix safely handling standard square CSVs or raw GEE dict formats
-    try:
-        df_mat = pd.read_csv(full_path, index_col=0)
-        if df_mat.shape[1] > 0 and isinstance(df_mat.iloc[0, 0], str) and df_mat.iloc[0, 0].startswith("{"):
-            raise ValueError("Raw GEE format detected")
-    except (ValueError, TypeError):
-        # Assumes parse_gee_raw_csv is defined in utils.py from the previous step
-        df_mat = parse_gee_raw_csv(full_path)
-
-    calc = ComponentCalculator(df_mat.values).calculate_components(force_component=force_comp)
-
-    for idx, class_id in enumerate([int(c) for c in df_mat.index]):
-        cls_name = class_labels_dict.get(class_id, {}).get("name", f"Class {class_id}")
-        comp_vals = calc.class_components[idx]
-
-        for comp_name in ["Quantity", "Exchange", "Shift"]:
-            label_comp = comp_name
-            if matrix_type in ["extent", "sum"]:
-                label_comp = f"Allocation_{comp_name}"
-            if "alternation" in matrix_type:
-                label_comp = f"Alternation_{comp_name}"
-
-            results.append({
-                "Time_Interval": label_time,
-                "Class": cls_name,
-                "Component": label_comp,
-                "Gain": comp_vals[f"{comp_name}_Gain"],
-                "Loss": comp_vals[f"{comp_name}_Loss"],
-            })
-    return results
-
-
+# ---------------------------------------------------------------------------
+# 6.3 COMPUTE CHANGE COMPONENTS
+# ---------------------------------------------------------------------------
 def generate_change_components_table(
     year_list: list,
     input_dir: str,
@@ -3373,7 +3060,9 @@ def generate_change_components_table(
         "alternation_exchange",
         "alternation_shift",
     ]
-    for mtype in tqdm(aggregate_types, desc="Processing aggregated matrices"):
+    for mtype in tqdm(
+        aggregate_types,
+        desc="Processing aggregated matrices"):
         all_results.extend(
             process_matrix(
                 matrix_type=mtype,
@@ -3390,497 +3079,28 @@ def generate_change_components_table(
 
     df_out = pd.DataFrame(all_results)
 
-    tables_dir = os.path.join(output_dir, "tables")
-    os.makedirs(tables_dir, exist_ok=True)
+    tables_dir = os.path.join(
+        output_dir,
+        "tables"
+    )
+    os.makedirs(
+        tables_dir,
+        exist_ok=True
+    )
 
-    output_file = os.path.join(tables_dir, "change_components.csv")
-    df_out.to_csv(output_file, index=False)
+    output_file = os.path.join(
+        tables_dir,
+        "change_components.csv"
+    )
+    df_out.to_csv(
+        output_file,
+        index=False
+    )
     print(f"\nSuccess! Final components saved to: {output_file}")
 
-def plot_change_components_time_intervals(
-    input_dir: str,
-    output_dir: str,
-) -> None:
-    """
-    Plot a stacked bar chart of change components over time intervals.
-
-    Reads the 'change_components.csv' file, aggregates the Gain
-    per time interval and component, and generates a scaled stacked
-    bar chart.
-
-    Parameters
-    ----------
-    input_dir : str
-        Directory path containing the 'tables' folder with the CSV.
-    output_dir : str
-        Directory path where the 'charts' folder will be saved.
-
-    Returns
-    -------
-    None
-        Saves the plot to disk and displays it.
-    """
-    import os
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as ticker
-
-    csv_path = os.path.join(input_dir, "tables", "change_components.csv")
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"Missing components file: {csv_path}")
-
-    df = pd.read_csv(csv_path)
-
-    # Filter only time intervals (containing '-')
-    time_df = df[df["Time_Interval"].str.contains("-")]
-
-    # Aggregate totals per interval and component (Gain)
-    totals = time_df.groupby(["Time_Interval", "Component"])["Gain"].sum().unstack()
-
-    # Choose scale automatically based on max value
-    max_val = totals[["Quantity", "Shift", "Exchange"]].to_numpy().max()
-
-    if max_val >= 1_000_000_000_000:
-        scale_factor = 1_000_000_000_000
-        y_label = "Change (trillion pixels)"
-    elif max_val >= 1_000_000_000:
-        scale_factor = 1_000_000_000
-        y_label = "Change (billion pixels)"
-    elif max_val >= 1_000_000:
-        scale_factor = 1_000_000
-        y_label = "Change (million pixels)"
-    elif max_val >= 1_000:
-        scale_factor = 1_000
-        y_label = "Change (thousand pixels)"
-    elif max_val >= 100:
-        scale_factor = 100
-        y_label = "Change (hundred pixels)"
-    else:
-        scale_factor = 1
-        y_label = "Change (pixels)"
-
-    # Scaled totals per component for plotting
-    scaled_totals = totals[["Quantity", "Shift", "Exchange"]] / scale_factor
-
-    # Maximum stacked height
-    stacked_max = scaled_totals.sum(axis=1).max()
-
-    fig, ax = plt.subplots(figsize=(14, 6))
-
-    # Colors configuration
-    colors = ["#1f77b4", "#2ca02c", "#ffd700"]
-    components_color = {
-        "Quantity": "#1f77b4",
-        "Shift": "#2ca02c",
-        "Exchange": "#ffd700",
-    }
-    components = ["Quantity", "Shift", "Exchange"]
-
-    # Stacked bars using scaled values
-    for idx, comp in enumerate(components):
-        bottom_values = scaled_totals.iloc[:, :idx].sum(axis=1) if idx > 0 else 0
-        ax.bar(
-            totals.index,
-            scaled_totals[comp],
-            label=comp,
-            color=colors[idx],
-            edgecolor="none",
-            bottom=bottom_values,
-            width=0.9,
-        )
-
-    # Axes formatting
-    ax.set_ylabel(y_label, fontsize=18)
-    ax.set_title("Change Components during Time Intervals", fontsize=20, pad=15)
-    ax.tick_params(axis="both", which="major", labelsize=18)
-
-    # Adaptive rotation for x-axis tick labels
-    labels = ax.get_xticklabels()
-    n_labels = len(labels)
-
-    if n_labels <= 6:
-        rotation, ha = 0, "center"
-    elif n_labels <= 12:
-        rotation, ha = 45, "right"
-    else:
-        rotation, ha = 90, "center"
-
-    plt.setp(labels, rotation=rotation, ha=ha)
-
-    # Y-axis limits and ticks
-    y_max_scaled = stacked_max * 1.1
-    ax.set_ylim(0, y_max_scaled)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(nbins=6, integer=True))
-
-    # Legend
-    legend_elements = [
-        plt.Rectangle((0, 0), 1, 1, color=components_color["Exchange"], label="Allocation Exchange"),
-        plt.Rectangle((0, 0), 1, 1, color=components_color["Shift"], label="Allocation Shift"),
-        plt.Rectangle((0, 0), 1, 1, color=components_color["Quantity"], label="Quantity"),
-    ]
-    ax.legend(
-        handles=legend_elements,
-        loc="center left",
-        bbox_to_anchor=(1.01, 0.5),
-        title="Component",
-        title_fontsize=16,
-        fontsize=16,
-        alignment="left",
-        frameon=False,
-    )
-
-    # Save and show
-    plt.tight_layout()
-
-    charts_dir = os.path.join(output_dir, "charts")
-    os.makedirs(charts_dir, exist_ok=True)
-
-    out_fig_path = os.path.join(charts_dir, "chart_change_components_time_interval.png")
-    plt.savefig(out_fig_path, bbox_inches="tight", format="png", dpi=300)
-    plt.show()
-    print(f"Chart saved to: {out_fig_path}")
-
-import os
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-
-
-def plot_components_with_alternation(csv_path: str, output_path: str) -> None:
-    """
-    Plot overall change components as a single stacked bar with auto-scaled y-axis for Real Data.
-
-    Parameters
-    ----------
-    csv_path : str
-        Path to the CSV file containing change components.
-    output_path : str
-        Directory where the output figure will be saved.
-    """
-    # 1. Load data
-    df = pd.read_csv(csv_path)
-
-    # 2. Define Colors and component order
-    components_color = {
-        "Quantity": "#1f77b4",
-        "Allocation_Exchange": "#ffd700",
-        "Alternation_Exchange": "#ff8080",
-        "Allocation_Shift": "#2ca02c",
-        "Alternation_Shift": "#990099",
-    }
-
-    component_order = [
-        "Quantity",
-        "Allocation_Shift",
-        "Allocation_Exchange",
-        "Alternation_Shift",
-        "Alternation_Exchange",
-    ]
-
-    # 3. Aggregate totals per component
-    component_totals = {
-        "Quantity": df[(df["Component"] == "Allocation_Quantity") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
-        "Allocation_Exchange": df[(df["Component"] == "Allocation_Exchange") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
-        "Allocation_Shift": df[(df["Component"] == "Allocation_Shift") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
-        "Alternation_Exchange": df[(df["Time_Interval"] == "alternation_exchange")]["Gain"].sum(),
-        "Alternation_Shift": df[(df["Time_Interval"] == "alternation_shift")]["Gain"].sum(),
-    }
-
-    # 4. Automatic scale based on the sum of all stacked components
-    total_change = sum(component_totals.values())
-
-    if total_change >= 1_000_000_000_000:
-        scale_factor = 1_000_000_000_000
-        y_label = "Change (trillion pixels)"
-    elif total_change >= 1_000_000_000:
-        scale_factor = 1_000_000_000
-        y_label = "Change (billion pixels)"
-    elif total_change >= 1_000_000:
-        scale_factor = 1_000_000
-        y_label = "Change (million pixels)"
-    elif total_change >= 1_000:
-        scale_factor = 1_000
-        y_label = "Change (thousand pixels)"
-    elif total_change >= 100:
-        scale_factor = 100
-        y_label = "Change (hundred pixels)"
-    else:
-        scale_factor = 1
-        y_label = "Change (pixels)"
-
-    # 5. Initialize figure and axis
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    # 6. Plot each component in a stacked bar at a single x-position
-    bottom = 0.0
-    for component in component_order:
-        value = component_totals.get(component, 0.0) / scale_factor
-        ax.bar(
-            x=0,
-            height=value,
-            bottom=bottom,
-            color=components_color[component],
-            edgecolor="none",
-            width=0.4,
-        )
-        bottom += value
-
-    # 7. Axes formatting and labels
-    ax.set_ylabel(y_label, fontsize=16)
-    ax.set_title("Change Components Overall", fontsize=18, pad=15)
-    ax.set_xticks([])
-    ax.tick_params(axis="both", which="major", labelsize=18)
-
-    # 8. Set y-axis limits and major tick locators
-    y_max_scaled = bottom * 1.05 if bottom > 0 else 1.0
-    ax.set_ylim(0, y_max_scaled)
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=10, integer=True))
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
-
-    # 9. Configure visible spines for the plot frame
-    for spine in ["top", "right", "bottom", "left"]:
-        ax.spines[spine].set_visible(True)
-        ax.spines[spine].set_color("black")
-        ax.spines[spine].set_linewidth(0.5)
-
-    # 10. Define custom legend elements
-    legend_elements = [
-        plt.Rectangle((0, 0), 1, 1, color=components_color["Alternation_Exchange"], label="Alternation Exchange"),
-        plt.Rectangle((0, 0), 1, 1, color=components_color["Alternation_Shift"], label="Alternation Shift"),
-        plt.Rectangle((0, 0), 1, 1, color=components_color["Allocation_Exchange"], label="Allocation Exchange"),
-        plt.Rectangle((0, 0), 1, 1, color=components_color["Allocation_Shift"], label="Allocation Shift"),
-        plt.Rectangle((0, 0), 1, 1, color=components_color["Quantity"], label="Quantity"),
-    ]
-
-    ax.legend(
-        handles=legend_elements,
-        loc="center left",
-        bbox_to_anchor=(1.05, 0.5),
-        title="Component",
-        title_fontsize=14,
-        fontsize=14,
-        alignment="left",
-        frameon=False,
-    )
-
-    # Force the main plotting box to always occupy the exact same spatial coordinates in the figure
-    fig.subplots_adjust(left=0.15, right=0.75, bottom=0.1, top=0.9)
-
-    # 11. Final layout adjustment and export
-    charts_dir = os.path.join(output_path, "charts")
-    os.makedirs(charts_dir, exist_ok=True)
-
-    out_fig_path = os.path.join(charts_dir, "graphic_change_components_overall.png")
-    plt.savefig(out_fig_path, bbox_inches="tight", format="png", dpi=300)
-    plt.show()
-    print(f"Chart saved to: {out_fig_path}")
-
-import os
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-
-
-def plot_change_components_by_class(
-    input_dir: str,
-    output_dir: str,
-    class_labels_dict: dict,
-) -> None:
-    """
-    Plot per-class gains and losses as stacked bars with auto-scaled y-axis.
-
-    Parameters
-    ----------
-    input_dir : str
-        Directory path containing the 'tables' folder with the CSV.
-    output_dir : str
-        Directory path where the 'charts' folder will be saved.
-    class_labels_dict : dict
-        Dictionary mapping class IDs to names/metadata.
-    """
-    # 1. Load Data
-    csv_path = os.path.join(input_dir, "tables", "change_components.csv")
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"Missing components file: {csv_path}")
-
-    df = pd.read_csv(csv_path)
-
-    # 2. Filter and Prepare Data
-    target_intervals = ["extent", "alternation_shift", "alternation_exchange"]
-    df_sub = df[df["Time_Interval"].isin(target_intervals)].copy()
-    df_sub["Component"] = df_sub["Component"].str.replace("Allocation_Quantity", "Quantity")
-
-    # 3. Colors and Order
-    components_map = {
-        "Quantity": "#1f77b4",
-        "Allocation_Exchange": "#ffd700",
-        "Alternation_Exchange": "#ff8080",
-        "Allocation_Shift": "#2ca02c",
-        "Alternation_Shift": "#990099",
-    }
-    comp_groups = ["Quantity", "Allocation_Shift", "Allocation_Exchange"]
-
-    # 4. Identify Classes and Sort by Net Quantity Change
-    classes = sorted(df_sub["Class"].unique())
-    class_stats = []
-
-    for cls in classes:
-        c_data = df_sub[df_sub["Class"] == cls]
-        qty_gain = c_data[c_data["Component"] == "Quantity"]["Gain"].sum()
-        qty_loss = c_data[c_data["Component"] == "Quantity"]["Loss"].sum()
-        class_stats.append((cls, qty_gain - qty_loss))
-
-    ordered_classes = [x[0] for x in sorted(class_stats, key=lambda x: x[1])]
-
-    # 5. Prepare Plot Data
-    plot_data = []
-    max_val = 0.0
-
-    for cls in ordered_classes:
-        c_data = df_sub[df_sub["Class"] == cls]
-
-        # --- GAINS ---
-        gains = {}
-        for comp in comp_groups:
-            gains[comp] = c_data[c_data["Component"] == comp]["Gain"].sum()
-
-        raw_alt_exc = c_data[c_data["Component"] == "Alternation_Exchange"]["Gain"].sum()
-        raw_alt_shift = c_data[c_data["Component"] == "Alternation_Shift"]["Gain"].sum()
-        net_alt = raw_alt_exc + raw_alt_shift
-
-        adj_alt_exc, adj_alt_shift = 0.0, 0.0
-        if net_alt > 0.0001:
-            if raw_alt_exc > 0:
-                adj_alt_exc = raw_alt_exc
-                adj_alt_shift = max(0, net_alt - raw_alt_exc)
-            else:
-                adj_alt_exc = 0
-                adj_alt_shift = net_alt
-
-        gains["Alternation_Exchange"] = adj_alt_exc
-        gains["Alternation_Shift"] = adj_alt_shift
-
-        # --- LOSSES ---
-        losses = {}
-        for comp in comp_groups:
-            losses[comp] = c_data[c_data["Component"] == comp]["Loss"].sum()
-
-        raw_alt_exc_l = c_data[c_data["Component"] == "Alternation_Exchange"]["Loss"].sum()
-        raw_alt_shift_l = c_data[c_data["Component"] == "Alternation_Shift"]["Loss"].sum()
-        net_alt_l = raw_alt_exc_l + raw_alt_shift_l
-
-        adj_alt_exc_l, adj_alt_shift_l = 0.0, 0.0
-        if net_alt_l > 0.0001:
-            if raw_alt_exc_l > 0:
-                adj_alt_exc_l = raw_alt_exc_l
-                adj_alt_shift_l = max(0, net_alt_l - raw_alt_exc_l)
-            else:
-                adj_alt_exc_l = 0
-                adj_alt_shift_l = net_alt_l
-
-        losses["Alternation_Exchange"] = adj_alt_exc_l
-        losses["Alternation_Shift"] = adj_alt_shift_l
-
-        # Track max height for scaling
-        max_val = max(max_val, sum(gains.values()), sum(losses.values()))
-        plot_data.append({"class": cls, "gains": gains, "losses": losses})
-
-    # 6. Determine Scale Factor
-    if max_val >= 1_000_000_000_000:
-        scale_factor, y_label = 1_000_000_000_000, "Loss and Gain (trillion pixels)"
-    elif max_val >= 1_000_000_000:
-        scale_factor, y_label = 1_000_000_000, "Loss and Gain (billion pixels)"
-    elif max_val >= 1_000_000:
-        scale_factor, y_label = 1_000_000, "Loss and Gain (million pixels)"
-    elif max_val >= 1_000:
-        scale_factor, y_label = 1_000, "Loss and Gain (thousand pixels)"
-    elif max_val >= 100:
-        scale_factor, y_label = 100, "Loss and Gain (hundred pixels)"
-    else:
-        scale_factor, y_label = 1, "Loss and Gain (pixels)"
-
-    # 7. Plotting
-    fig, ax = plt.subplots(figsize=(14, 8))
-    fig.subplots_adjust(left=0.1, right=0.75)
-
-    x_pos = np.arange(len(ordered_classes))
-    width = 0.6
-
-    stack_order = [
-        "Quantity",
-        "Allocation_Shift",
-        "Allocation_Exchange",
-        "Alternation_Shift",
-        "Alternation_Exchange",
-    ]
-
-    for idx, item in enumerate(plot_data):
-        # Gains (Upwards)
-        bottom_g = 0.0
-        for comp in stack_order:
-            val = item["gains"][comp] / scale_factor
-            if val > 0:
-                ax.bar(x_pos[idx], val, width, bottom=bottom_g, color=components_map[comp], edgecolor="none")
-                bottom_g += val
-
-        # Losses (Downwards)
-        bottom_l = 0.0
-        for comp in stack_order:
-            val = item["losses"][comp] / scale_factor
-            if val > 0:
-                ax.bar(x_pos[idx], -val, width, bottom=bottom_l, color=components_map[comp], edgecolor="none")
-                bottom_l -= val
-
-    # 8. Formatting
-    class_names = [
-        class_labels_dict.get(int(c) if str(c).isdigit() else c, {}).get("name", str(c))
-        for c in ordered_classes
-    ]
-
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(class_names, rotation=90, ha="center", fontsize=14)
-    ax.axhline(0, color="black", linewidth=0.8)
-
-    ax.set_ylabel(y_label, fontsize=20)
-    ax.set_title("Change Components by Class", fontsize=20, pad=15)
-    ax.tick_params(axis="x", labelsize=16)
-    ax.tick_params(axis="y", labelsize=24)
-
-    limit = max_val / scale_factor * 1.1 if max_val > 0 else 1.0
-    ax.set_ylim(-limit, limit)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True, nbins=10))
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%d"))
-
-    handles = [
-        plt.Rectangle((0, 0), 1, 1, color=components_map[c], label=c.replace("_", " "))
-        for c in reversed(stack_order)
-    ]
-
-    ax.legend(
-        handles=handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        title="Component",
-        title_fontsize=16,
-        alignment="left",
-        fontsize=16,
-        frameon=False,
-    )
-
-    plt.tight_layout()
-
-    charts_dir = os.path.join(output_dir, "charts")
-    os.makedirs(charts_dir, exist_ok=True)
-
-    out_fig_path = os.path.join(charts_dir, "chart_change_component_change_class.png")
-    plt.savefig(out_fig_path, bbox_inches="tight", format="png", dpi=300)
-    plt.show()
-    print(f"Chart saved to: {out_fig_path}")
-
-
-import re
-from typing import List, Union, Dict
+# ---------------------------------------------------------------------------
+# 6.4 HEAT MAPS
+# ---------------------------------------------------------------------------
 
 def _extract_year_str(val: Union[str, int]) -> str:
     """
@@ -3898,65 +3118,6 @@ def _extract_year_str(val: Union[str, int]) -> str:
     """
     match = re.search(r"(\d+)", str(val))
     return match.group(1) if match else str(val)
-
-
-def validate_and_get_interval(
-    years: List[int],
-    output_path: str,
-    class_labels_dict: Dict[int, str]
-) -> str:
-    """
-    Validates global inputs and generates an interval string based on years.
-
-    Parameters
-    ----------
-    years : list of int
-        List of years to process.
-    output_path : str
-        Directory path for outputs.
-    class_labels_dict : dict
-        Dictionary mapping class values to labels.
-
-    Returns
-    -------
-    str
-        The formatted interval string (e.g., '2001-2019').
-
-    Raises
-    ------
-    ValueError
-        If any of the inputs are invalid or missing.
-    """
-    if not (isinstance(years, (list, tuple)) and len(years) >= 2):
-        raise ValueError("`years` missing, invalid, or contains fewer than 2 elements.")
-    
-    if not (isinstance(output_path, str) and output_path):
-        raise ValueError("`output_path` missing or invalid.")
-        
-    if not (isinstance(class_labels_dict, dict) and class_labels_dict):
-        raise ValueError("`class_labels_dict` missing or invalid.")
-
-    str_y0 = _extract_year_str(years[0])
-    str_y1 = _extract_year_str(years[-1])
-
-    return f"{str_y0}-{str_y1}"
-
-import os
-from typing import Dict, Any
-
-# Define matrix metadata dictionary
-MATRIX_META: Dict[str, list] = {
-    "sum": ["sum", "Time Intervals", "flow"],
-    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
-    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
-    "ext": ["extent", "Extent", "stock"],
-    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
-    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
-    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
-}
-
-import pandas as pd
-from typing import Dict
 
 def load_square_matrix(csv_path: str) -> pd.DataFrame:
     """
@@ -3986,15 +3147,59 @@ def load_square_matrix(csv_path: str) -> pd.DataFrame:
             set(df.index).union(df.columns),
             key=lambda x: int(x),
         )
-        df = df.reindex(index=labels, columns=labels).fillna(0.0)
+        df = df.reindex(
+            index=labels,
+            columns=labels).fillna(0.0)
 
     if df.shape[0] != df.shape[1]:
         raise ValueError(f"Matrix not square after alignment: {csv_path}")
 
     return df
 
-import pandas as pd
-import numpy as np
+def label_id_to_name(
+    labels: Iterable[str],
+    class_labels_dict: dict,
+) -> list[str]:
+    """
+    Map class ID strings to human-readable names using class_labels_dict.
+
+    Parameters
+    ----------
+    labels : Iterable[str]
+        Class IDs as strings (e.g. ["1", "2", "3"]).
+    class_labels_dict : dict
+        Dictionary containing metadata for each class ID.
+
+    Returns
+    -------
+    list[str]
+        List of class names mapped from IDs.
+    """
+    id_to_name = {
+        int(k): v.get(
+            "rename",
+            v.get(
+                "name",
+                str(k),
+            ),
+        )
+        for k, v in class_labels_dict.items()
+    }
+
+    names: list[str] = []
+    for lab in labels:
+        try:
+            cid = int(str(lab))
+            names.append(
+                id_to_name.get(
+                    cid,
+                    str(lab),
+                ),
+            )
+        except Exception:
+            names.append(str(lab))
+
+    return names
 
 def compute_net_change_from_sum(df_sum: pd.DataFrame) -> pd.Series:
     """
@@ -4047,56 +3252,6 @@ def reorder_all_matrices(matrices_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd
 
     return reordered
 
-def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, Any]:
-    """
-    Load transition matrices from CSVs and reorder them based on sum net change.
-
-    Parameters
-    ----------
-    output_path : str
-        Base directory path where the matrix CSV files are stored.
-    interval_str : str
-        Formatted interval string (e.g., '2001-2019').
-
-    Returns
-    -------
-    dict
-        Dictionary containing the loaded and reordered matrices.
-    """
-    matrices = {}
-
-    for key, meta in MATRIX_META.items():
-        # Look directly in the output_path instead of the 'tables' subfolder
-        csv_path = os.path.join(output_path, f"transition_matrix_{meta[0]}_{interval_str}.csv")
-        
-        if os.path.exists(csv_path):
-            matrices[key] = load_square_matrix(csv_path=csv_path)
-        else:
-            print(f"Warning: Matrix file not found at {csv_path}")
-
-    if matrices:
-        matrices = reorder_all_matrices(matrices_dict=matrices)
-
-    return matrices
-
-import os
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-import matplotlib.ticker as mticker
-from typing import Dict, Any, List
-
-# Define matrix metadata dictionary globally for reuse
-MATRIX_META = {
-    "sum": ["sum", "Time Intervals", "flow"],
-    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
-    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
-    "ext": ["extent", "Extent", "stock"],
-    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
-    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
-    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
-}
 
 def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8, 
                      show_diagonal: bool = False, equalize_diagonal_font: bool = False) -> None:
@@ -4649,6 +3804,1435 @@ def plot_heatmap(
 
     plt.show()
 
+# ---------------------------------------------------------------------------
+# 6.5 QUEST CHARTS
+# ---------------------------------------------------------------------------
+
+def plot_change_components_time_intervals(
+    input_dir: str,
+    output_dir: str,
+) -> None:
+    """
+    Plot a stacked bar chart of change components over time intervals.
+
+    Reads the 'change_components.csv' file, aggregates the Gain
+    per time interval and component, and generates a scaled stacked
+    bar chart.
+
+    Parameters
+    ----------
+    input_dir : str
+        Directory path containing the 'tables' folder with the CSV.
+    output_dir : str
+        Directory path where the 'charts' folder will be saved.
+
+    Returns
+    -------
+    None
+        Saves the plot to disk and displays it.
+    """
+
+    csv_path = os.path.join(
+        input_dir,
+        "tables",
+        "change_components.csv"
+    )
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Missing components file: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+
+    # Filter only time intervals (containing '-')
+    time_df = df[df["Time_Interval"].str.contains("-")]
+
+    # Aggregate totals per interval and component (Gain)
+    totals = time_df.groupby(["Time_Interval", "Component"])["Gain"].sum().unstack()
+
+    # Choose scale automatically based on max value
+    max_val = totals[["Quantity", "Shift", "Exchange"]].to_numpy().max()
+
+    if max_val >= 1_000_000_000_000:
+        scale_factor = 1_000_000_000_000
+        y_label = "Change (trillion pixels)"
+    elif max_val >= 1_000_000_000:
+        scale_factor = 1_000_000_000
+        y_label = "Change (billion pixels)"
+    elif max_val >= 1_000_000:
+        scale_factor = 1_000_000
+        y_label = "Change (million pixels)"
+    elif max_val >= 1_000:
+        scale_factor = 1_000
+        y_label = "Change (thousand pixels)"
+    elif max_val >= 100:
+        scale_factor = 100
+        y_label = "Change (hundred pixels)"
+    else:
+        scale_factor = 1
+        y_label = "Change (pixels)"
+
+    # Scaled totals per component for plotting
+    scaled_totals = totals[["Quantity", "Shift", "Exchange"]] / scale_factor
+
+    # Maximum stacked height
+    stacked_max = scaled_totals.sum(axis=1).max()
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    # Colors configuration
+    colors = [
+        "#1f77b4",
+        "#2ca02c",
+        "#ffd700"
+    ]
+    components_color = {
+        "Quantity": "#1f77b4",
+        "Shift":    "#2ca02c",
+        "Exchange": "#ffd700",
+    }
+    components = [
+        "Quantity",
+        "Shift",
+        "Exchange"
+    ]
+
+    # Stacked bars using scaled values
+    for idx, comp in enumerate(components):
+        bottom_values = scaled_totals.iloc[:, :idx].sum(axis=1) if idx > 0 else 0
+        ax.bar(
+            totals.index,
+            scaled_totals[comp],
+            label=comp,
+            color=colors[idx],
+            edgecolor="none",
+            bottom=bottom_values,
+            width=0.9,
+        )
+
+    # Axes formatting
+    ax.set_ylabel(
+        y_label,
+        fontsize=18
+    )
+    ax.set_title(
+        "Change Components during Time Intervals",
+        fontsize=20,
+        pad=15
+    )
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=18
+    )
+
+    # Adaptive rotation for x-axis tick labels
+    labels = ax.get_xticklabels()
+    n_labels = len(labels)
+
+    if n_labels <= 6:
+        rotation, ha = 0, "center"
+    elif n_labels <= 12:
+        rotation, ha = 45, "right"
+    else:
+        rotation, ha = 90, "center"
+
+    plt.setp(
+        labels,
+        rotation=rotation, 
+        ha=ha
+    )
+
+    # Y-axis limits and ticks
+    y_max_scaled = stacked_max * 1.1
+    ax.set_ylim(0, y_max_scaled)
+    ax.yaxis.set_major_locator(
+        ticker.MaxNLocator(
+            nbins=6,
+            integer=True
+            )
+    )
+
+    # Legend
+    legend_elements = [
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Exchange"], label="Allocation Exchange"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Shift"], label="Allocation Shift"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Quantity"], label="Quantity"),
+    ]
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        title="Component",
+        title_fontsize=16,
+        fontsize=16,
+        alignment="left",
+        frameon=False,
+    )
+
+    # Save and show
+    plt.tight_layout()
+
+    charts_dir = os.path.join(
+        output_dir,
+        "charts"
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True
+    )
+    out_fig_path = os.path.join(
+        charts_dir,
+        "chart_change_components_time_interval.png"
+    )
+    plt.savefig(
+        out_fig_path,
+        bbox_inches="tight",
+        format="png",
+        dpi=300
+    )
+    plt.show()
+    print(f"Chart saved to: {out_fig_path}")
+
+def plot_components_with_alternation(csv_path: str, output_path: str) -> None:
+    """
+    Plot overall change components as a single stacked bar with auto-scaled y-axis for Real Data.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the CSV file containing change components.
+    output_path : str
+        Directory where the output figure will be saved.
+    """
+    # 1. Load data
+    df = pd.read_csv(csv_path)
+
+    # 2. Define Colors and component order
+    components_color = {
+        "Quantity":            "#1f77b4",
+        "Allocation_Exchange": "#ffd700",
+        "Alternation_Exchange":"#ff8080",
+        "Allocation_Shift":    "#2ca02c",
+        "Alternation_Shift":   "#990099",
+    }
+
+    component_order = [
+        "Quantity",
+        "Allocation_Shift",
+        "Allocation_Exchange",
+        "Alternation_Shift",
+        "Alternation_Exchange",
+    ]
+
+    # 3. Aggregate totals per component
+    component_totals = {
+        "Quantity": df[(df["Component"] == "Allocation_Quantity") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
+        "Allocation_Exchange": df[(df["Component"] == "Allocation_Exchange") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
+        "Allocation_Shift": df[(df["Component"] == "Allocation_Shift") & (df["Time_Interval"] == "extent")]["Gain"].sum(),
+        "Alternation_Exchange": df[(df["Time_Interval"] == "alternation_exchange")]["Gain"].sum(),
+        "Alternation_Shift": df[(df["Time_Interval"] == "alternation_shift")]["Gain"].sum(),
+    }
+
+    # 4. Automatic scale based on the sum of all stacked components
+    total_change = sum(component_totals.values())
+
+    if total_change >= 1_000_000_000_000:
+        scale_factor = 1_000_000_000_000
+        y_label = "Change (trillion pixels)"
+    elif total_change >= 1_000_000_000:
+        scale_factor = 1_000_000_000
+        y_label = "Change (billion pixels)"
+    elif total_change >= 1_000_000:
+        scale_factor = 1_000_000
+        y_label = "Change (million pixels)"
+    elif total_change >= 1_000:
+        scale_factor = 1_000
+        y_label = "Change (thousand pixels)"
+    elif total_change >= 100:
+        scale_factor = 100
+        y_label = "Change (hundred pixels)"
+    else:
+        scale_factor = 1
+        y_label = "Change (pixels)"
+
+    # 5. Initialize figure and axis
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # 6. Plot each component in a stacked bar at a single x-position
+    bottom = 0.0
+    for component in component_order:
+        value = component_totals.get(component, 0.0) / scale_factor
+        ax.bar(
+            x=0,
+            height=value,
+            bottom=bottom,
+            color=components_color[component],
+            edgecolor="none",
+            width=0.4,
+        )
+        bottom += value
+
+    # 7. Axes formatting and labels
+    ax.set_ylabel(
+        y_label,
+        fontsize=16
+    )
+    ax.set_title(
+        "Change Components Overall",
+        fontsize=18,
+        pad=15
+    )
+    ax.set_xticks([])
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=18
+    )
+
+    # 8. Set y-axis limits and major tick locators
+    y_max_scaled = bottom * 1.05 if bottom > 0 else 1.0
+    ax.set_ylim(
+        0,
+        y_max_scaled
+    )
+    ax.yaxis.set_major_locator(
+        mticker.MaxNLocator(
+            nbins=10,
+            integer=True
+            )
+    )
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
+
+    # 9. Configure visible spines for the plot frame
+    for spine in ["top", "right", "bottom", "left"]:
+        ax.spines[spine].set_visible(True)
+        ax.spines[spine].set_color("black")
+        ax.spines[spine].set_linewidth(0.5)
+
+    # 10. Define custom legend elements
+    legend_elements = [
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Alternation_Exchange"], label="Alternation Exchange"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Alternation_Shift"], label="Alternation Shift"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Allocation_Exchange"], label="Allocation Exchange"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Allocation_Shift"], label="Allocation Shift"),
+        plt.Rectangle((0, 0), 1, 1, color=components_color["Quantity"], label="Quantity"),
+    ]
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.05, 0.5),
+        title="Component",
+        title_fontsize=14,
+        fontsize=14,
+        alignment="left",
+        frameon=False,
+    )
+
+    # Force the main plotting box to always occupy the exact same spatial coordinates in the figure
+    fig.subplots_adjust(
+        left=0.15,
+        right=0.75,
+        bottom=0.1,
+        top=0.9
+    )
+
+    # 11. Final layout adjustment and export
+    charts_dir = os.path.join(
+        output_path,
+        "charts"
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True
+    )
+    out_fig_path = os.path.join(
+        charts_dir,
+        "graphic_change_components_overall.png"
+    )
+    plt.savefig(
+        out_fig_path,
+        bbox_inches="tight",
+        format="png",
+        dpi=300
+    )
+    plt.show()
+    print(f"Chart saved to: {out_fig_path}")
+
+
+def plot_change_components_by_class(
+    input_dir: str,
+    output_dir: str,
+    class_labels_dict: dict,
+) -> None:
+    """
+    Plot per-class gains and losses as stacked bars with auto-scaled y-axis.
+
+    Parameters
+    ----------
+    input_dir : str
+        Directory path containing the 'tables' folder with the CSV.
+    output_dir : str
+        Directory path where the 'charts' folder will be saved.
+    class_labels_dict : dict
+        Dictionary mapping class IDs to names/metadata.
+    """
+    # 1. Load Data
+    csv_path = os.path.join(
+        input_dir,
+        "tables",
+        "change_components.csv"
+    )
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Missing components file: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+
+    # 2. Filter and Prepare Data
+    target_intervals = ["extent", "alternation_shift", "alternation_exchange"]
+    df_sub = df[df["Time_Interval"].isin(target_intervals)].copy()
+    df_sub["Component"] = df_sub["Component"].str.replace("Allocation_Quantity", "Quantity")
+
+    # 3. Colors and Order
+    components_map = {
+        "Quantity": "#1f77b4",
+        "Allocation_Exchange": "#ffd700",
+        "Alternation_Exchange": "#ff8080",
+        "Allocation_Shift": "#2ca02c",
+        "Alternation_Shift": "#990099",
+    }
+    comp_groups = [
+        "Quantity",
+        "Allocation_Shift",
+        "Allocation_Exchange"
+    ]
+
+    # 4. Identify Classes and Sort by Net Quantity Change
+    classes = sorted(df_sub["Class"].unique())
+    class_stats = []
+
+    for cls in classes:
+        c_data = df_sub[df_sub["Class"] == cls]
+        qty_gain = c_data[c_data["Component"] == "Quantity"]["Gain"].sum()
+        qty_loss = c_data[c_data["Component"] == "Quantity"]["Loss"].sum()
+        class_stats.append((cls, qty_gain - qty_loss))
+
+    ordered_classes = [x[0] for x in sorted(class_stats, key=lambda x: x[1])]
+
+    # 5. Prepare Plot Data
+    plot_data = []
+    max_val = 0.0
+
+    for cls in ordered_classes:
+        c_data = df_sub[df_sub["Class"] == cls]
+
+        # --- GAINS ---
+        gains = {}
+        for comp in comp_groups:
+            gains[comp] = c_data[c_data["Component"] == comp]["Gain"].sum()
+
+        raw_alt_exc = c_data[c_data["Component"] == "Alternation_Exchange"]["Gain"].sum()
+        raw_alt_shift = c_data[c_data["Component"] == "Alternation_Shift"]["Gain"].sum()
+        net_alt = raw_alt_exc + raw_alt_shift
+
+        adj_alt_exc, adj_alt_shift = 0.0, 0.0
+        if net_alt > 0.0001:
+            if raw_alt_exc > 0:
+                adj_alt_exc = raw_alt_exc
+                adj_alt_shift = max(0, net_alt - raw_alt_exc)
+            else:
+                adj_alt_exc = 0
+                adj_alt_shift = net_alt
+
+        gains["Alternation_Exchange"] = adj_alt_exc
+        gains["Alternation_Shift"] = adj_alt_shift
+
+        # --- LOSSES ---
+        losses = {}
+        for comp in comp_groups:
+            losses[comp] = c_data[c_data["Component"] == comp]["Loss"].sum()
+
+        raw_alt_exc_l = c_data[c_data["Component"] == "Alternation_Exchange"]["Loss"].sum()
+        raw_alt_shift_l = c_data[c_data["Component"] == "Alternation_Shift"]["Loss"].sum()
+        net_alt_l = raw_alt_exc_l + raw_alt_shift_l
+
+        adj_alt_exc_l, adj_alt_shift_l = 0.0, 0.0
+        if net_alt_l > 0.0001:
+            if raw_alt_exc_l > 0:
+                adj_alt_exc_l = raw_alt_exc_l
+                adj_alt_shift_l = max(0, net_alt_l - raw_alt_exc_l)
+            else:
+                adj_alt_exc_l = 0
+                adj_alt_shift_l = net_alt_l
+
+        losses["Alternation_Exchange"] = adj_alt_exc_l
+        losses["Alternation_Shift"] = adj_alt_shift_l
+
+        # Track max height for scaling
+        max_val = max(max_val, sum(gains.values()), sum(losses.values()))
+        plot_data.append({"class": cls, "gains": gains, "losses": losses})
+
+    # 6. Determine Scale Factor
+    if max_val >= 1_000_000_000_000:
+        scale_factor, y_label = 1_000_000_000_000, "Loss and Gain (trillion pixels)"
+    elif max_val >= 1_000_000_000:
+        scale_factor, y_label = 1_000_000_000, "Loss and Gain (billion pixels)"
+    elif max_val >= 1_000_000:
+        scale_factor, y_label = 1_000_000, "Loss and Gain (million pixels)"
+    elif max_val >= 1_000:
+        scale_factor, y_label = 1_000, "Loss and Gain (thousand pixels)"
+    elif max_val >= 100:
+        scale_factor, y_label = 100, "Loss and Gain (hundred pixels)"
+    else:
+        scale_factor, y_label = 1, "Loss and Gain (pixels)"
+
+    # 7. Plotting
+    fig, ax = plt.subplots(figsize=(14, 8))
+    fig.subplots_adjust(
+        left=0.1,
+        right=0.75
+    )
+
+    x_pos = np.arange(len(ordered_classes))
+    width = 0.6
+
+    stack_order = [
+        "Quantity",
+        "Allocation_Shift",
+        "Allocation_Exchange",
+        "Alternation_Shift",
+        "Alternation_Exchange",
+    ]
+
+    for idx, item in enumerate(plot_data):
+        # Gains (Upwards)
+        bottom_g = 0.0
+        for comp in stack_order:
+            val = item["gains"][comp] / scale_factor
+            if val > 0:
+                ax.bar(x_pos[idx], val, width, bottom=bottom_g, color=components_map[comp], edgecolor="none")
+                bottom_g += val
+
+        # Losses (Downwards)
+        bottom_l = 0.0
+        for comp in stack_order:
+            val = item["losses"][comp] / scale_factor
+            if val > 0:
+                ax.bar(x_pos[idx], -val, width, bottom=bottom_l, color=components_map[comp], edgecolor="none")
+                bottom_l -= val
+
+    # 8. Formatting
+    class_names = [
+        class_labels_dict.get(int(c) if str(c).isdigit() else c, {}).get("name", str(c))
+        for c in ordered_classes
+    ]
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(
+        class_names,
+        rotation=90,
+        ha="center",
+        fontsize=14
+    )
+    ax.axhline(
+        0,
+        color="black",
+        linewidth=0.8
+    )
+
+    ax.set_ylabel(
+        y_label,
+        fontsize=20
+    )
+    ax.set_title(
+        "Change Components by Class",
+        fontsize=20,
+        pad=15
+    )
+    ax.tick_params(
+        axis="x",
+        labelsize=16
+    )
+    ax.tick_params(
+        axis="y",
+        labelsize=24
+    )
+
+    limit = max_val / scale_factor * 1.1 if max_val > 0 else 1.0
+    ax.set_ylim(-limit, limit)
+    ax.yaxis.set_major_locator(
+        ticker.MaxNLocator(
+            integer=True,
+            nbins=10
+        )
+    )
+    ax.yaxis.set_major_formatter(
+        ticker.FormatStrFormatter("%d")
+    )
+
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color=components_map[c], label=c.replace("_", " "))
+        for c in reversed(stack_order)
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        title="Component",
+        title_fontsize=16,
+        alignment="left",
+        fontsize=16,
+        frameon=False,
+    )
+
+    plt.tight_layout()
+
+    charts_dir = os.path.join(
+        output_dir,
+        "charts"
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True
+    )
+
+    out_fig_path = os.path.join(
+        charts_dir,
+        "chart_change_component_change_class.png"
+    )
+    plt.savefig(
+        out_fig_path,
+        bbox_inches="tight",
+        format="png",
+        dpi=300
+    )
+    plt.show()
+    print(f"Chart saved to: {out_fig_path}")
+
+# ---------------------------------------------------------------------------
+# 6.6 PLOT MAPS
+# ---------------------------------------------------------------------------
+
+def export_quantity_component_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = 255,
+) -> ee.batch.Task:
+    """
+    Compute and export a raster representing the Quantity Component of change using GEE.
+
+    A pixel's quantity component is 1 when the begin class differs from
+    the finish class; otherwise, it is 0.
+
+    Parameters
+    ----------
+    year_list : list
+        List of years representing the timeline.
+    drive_folder : str
+        Google Drive folder name for exports.
+    scale : int, optional
+        Spatial resolution in meters, by default 300.
+    nodata_val : int, optional
+        NoData value to be used for masking, by default 255.
+
+    Returns
+    -------
+    ee.batch.Task
+        The submitted Earth Engine export task.
+    """
+    # 1. Fetch start and end years
+    start_year = year_list[0]
+    end_year = year_list[-1]
+
+    # 2. Fetch start and end images directly from the collection
+    # Note: GLANCE_COLLECTION_ID and GLANCE_CLASS_BAND must be defined in utils.py
+    start_img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+        ee.Filter.calendarRange(start_year, start_year, 'year')
+    ).select(GLANCE_CLASS_BAND).mosaic()
+    start_img = start_img.updateMask(start_img.neq(nodata_val))
+
+    end_img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+        ee.Filter.calendarRange(end_year, end_year, 'year')
+    ).select(GLANCE_CLASS_BAND).mosaic()
+    end_img = end_img.updateMask(end_img.neq(nodata_val))
+
+    # 3. Compute Quantity Component: 1 if start != end, else 0
+    quantity_image = start_img.neq(end_img).multiply(1).toUint8()
+
+    # 4. Apply NoData unmasking and set the system:no_data_value property
+    quantity_image = quantity_image.unmask(nodata_val)
+    quantity_image = quantity_image.set('system:no_data_value', nodata_val)
+
+    # 5. Define the Earth Engine export task
+    task_desc = f"Quantity_Component_{start_year}_{end_year}"
+    task = ee.batch.Export.image.toDrive(
+        image=quantity_image,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=GLOBAL_GEOM,
+        maxPixels=1e13,
+    )
+
+    # 6. Start the export task
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
+
+    return task
+
+def plot_quantity_component_map(
+    output_dir: str,
+    nodata_val: int,
+    raster_filename: str,
+    scale_factor: float = 0.05,
+) -> None:
+    """
+    Plot the Quantity Component (Extent Change) raster map with cartographic elements.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing the exported GEE tiles and where the map will be saved.
+    nodata_val : int
+        Value representing NoData in the raster to be masked out.
+    raster_filename : str
+        Prefix of the raster tiles to plot.
+    scale_factor : float, optional
+        Scale factor to downsample the massive global raster to fit into memory.
+
+    Returns
+    -------
+    None
+    """
+    # 1. Locate all raster tiles exported by GEE
+    raster_files = glob.glob(os.path.join(
+        output_dir,
+        f"{raster_filename}*.tif"
+        )
+    )
+    if not raster_files:
+        raise FileNotFoundError(
+            f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
+        )
+
+    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
+    vrt_path = os.path.join(
+        output_dir,
+        "merged_quantity.vrt"
+    )
+    files_str = " ".join([f'"{f}"' for f in raster_files])
+    os.system(f"gdalbuildvrt {vrt_path} {files_str}")
+
+    # 3. Calculate pixel size for scale bar
+    # Assumes compute_display_pixel_size_km is defined in the same module
+    pixel_size_km = compute_display_pixel_size_km(
+        raster_path=vrt_path,
+        downsample_factor=scale_factor,
+    )
+
+    # 4. Read raster and basic metadata with downsampling
+    with rasterio.open(vrt_path) as src:
+        out_shape = (
+            max(1, int(src.height * scale_factor)),
+            max(1, int(src.width * scale_factor)),
+        )
+        data = src.read(
+            1,
+            out_shape=out_shape,
+            resampling=rasterio.enums.Resampling.nearest,
+        )
+
+        # Force masking using the provided nodata value
+        data = np.ma.masked_equal(
+            data,
+            nodata_val
+        )
+
+        src_crs = src.crs
+        # Adjust the affine transform for the new downsampled resolution
+        transform = src.transform * src.transform.scale(
+            (src.width / data.shape[1]),
+            (src.height / data.shape[0]),
+        )
+        height, width = data.shape
+
+    # 5. Figure
+    fig, ax = plt.subplots(
+        figsize=(20, 10),
+        dpi=300
+    )
+
+    # 6. Colormap for 0 and 1
+    cmap = ListedColormap(
+        ["#c0c0c0", 
+         "#fde725"]
+    )
+    bounds = [-0.5, 0.5, 1.5]
+    norm = BoundaryNorm(bounds, cmap.N)
+
+    # 7. Plot raster
+    ax.imshow(
+        data,
+        cmap=cmap,
+        interpolation="nearest",
+        norm=norm,
+    )
+
+    # 8. Legend (adapted for 0 and 1 only)
+    legend_elements = [
+        Patch(
+            facecolor="#c0c0c0",
+            label="0",
+            edgecolor="black",
+            linewidth=0,
+        ),
+        Patch(
+            facecolor="#fde725",
+            label="1",
+            edgecolor="black",
+            linewidth=0,
+        ),
+    ]
+
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+        fontsize=14,
+        borderpad=1.2,
+        title="Change",
+        title_fontsize=14,
+        alignment="left",
+        handletextpad=0.8,
+        columnspacing=2,
+        labelspacing=0.8,
+        handlelength=2.0,
+        handleheight=1.5,
+    )
+
+    # 9. Cartographic elements
+    degree_in_meters = 111320.0
+    dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
+
+    def km_formatter(value, unit):
+        if unit == "Mm":
+            return f"{int(value * 1000)} km"
+        return f"{int(value)} {unit}"
+
+    scalebar = ScaleBar(
+        dx=dx_meters,
+        units="m",
+        length_fraction=0.15,
+        location="lower left",
+        box_alpha=0.6,
+        scale_formatter=km_formatter,
+    )
+    ax.add_artist(scalebar)
+
+    try:
+        # Assumes north_arrow is defined in the same module
+        north_arrow(
+            ax,
+            location="upper right",
+            shadow=False,
+            rotation={"degrees": 0},
+            scale=0.5,
+        )
+    except NameError:
+        print("north_arrow function not found. Skipping north arrow.")
+
+    # 10. Axes styling
+    ax.set_title(
+        "Extent Change",
+        fontsize=18,
+        pad=10
+    )
+    ax.set_aspect("equal")
+
+    to_latlon = Transformer.from_crs(
+        src_crs,
+        "EPSG:4326",
+        always_xy=True
+    )
+
+    def format_lon(x, pos):
+        x = np.clip(x, 0, width - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, height // 2, x)
+        lon, _ = to_latlon.transform(x_proj, y_proj)
+        return f"{lon:.1f}°"
+
+    def format_lat(y, pos):
+        y = np.clip(y, 0, height - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, y, width // 2)
+        _, lat = to_latlon.transform(x_proj, y_proj)
+        return f"{lat:.1f}°"
+
+    ax.xaxis.set_major_formatter(FuncFormatter(format_lon))
+    ax.yaxis.set_major_formatter(FuncFormatter(format_lat))
+
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=10,
+        pad=4
+    )
+    plt.setp(
+        ax.get_yticklabels(),
+        rotation=90,
+        va="center"
+    )
+
+    # 11. Save and Show
+    maps_dir = os.path.join(output_dir, "maps")
+    os.makedirs(maps_dir, exist_ok=True)
+    output_figure_path = os.path.join(maps_dir, "map_extent_change.png")
+
+    plt.savefig(
+        output_figure_path,
+        dpi=300,
+        bbox_inches="tight",
+        format="png",
+        pad_inches=0.5,
+    )
+    plt.show()
+    print(f"Map figure saved successfully to: {output_figure_path}")
+
+
+
+
+
+
+
+
+def validate_and_get_interval(
+    years: List[int],
+    output_path: str,
+    class_labels_dict: Dict[int, str]
+) -> str:
+    """
+    Validates global inputs and generates an interval string based on years.
+
+    Parameters
+    ----------
+    years : list of int
+        List of years to process.
+    output_path : str
+        Directory path for outputs.
+    class_labels_dict : dict
+        Dictionary mapping class values to labels.
+
+    Returns
+    -------
+    str
+        The formatted interval string (e.g., '2001-2019').
+
+    Raises
+    ------
+    ValueError
+        If any of the inputs are invalid or missing.
+    """
+    if not (isinstance(years, (list, tuple)) and len(years) >= 2):
+        raise ValueError("`years` missing, invalid, or contains fewer than 2 elements.")
+    
+    if not (isinstance(output_path, str) and output_path):
+        raise ValueError("`output_path` missing or invalid.")
+        
+    if not (isinstance(class_labels_dict, dict) and class_labels_dict):
+        raise ValueError("`class_labels_dict` missing or invalid.")
+
+    str_y0 = _extract_year_str(years[0])
+    str_y1 = _extract_year_str(years[-1])
+
+    return f"{str_y0}-{str_y1}"
+
+# Define matrix metadata dictionary
+MATRIX_META: Dict[str, list] = {
+    "sum": ["sum", "Time Intervals", "flow"],
+    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
+    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
+    "ext": ["extent", "Extent", "stock"],
+    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
+    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
+    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
+}
+
+def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, Any]:
+    """
+    Load transition matrices from CSVs and reorder them based on sum net change.
+
+    Parameters
+    ----------
+    output_path : str
+        Base directory path where the matrix CSV files are stored.
+    interval_str : str
+        Formatted interval string (e.g., '2001-2019').
+
+    Returns
+    -------
+    dict
+        Dictionary containing the loaded and reordered matrices.
+    """
+    matrices = {}
+
+    for key, meta in MATRIX_META.items():
+        # Look directly in the output_path instead of the 'tables' subfolder
+        csv_path = os.path.join(output_path, f"transition_matrix_{meta[0]}_{interval_str}.csv")
+        
+        if os.path.exists(csv_path):
+            matrices[key] = load_square_matrix(csv_path=csv_path)
+        else:
+            print(f"Warning: Matrix file not found at {csv_path}")
+
+    if matrices:
+        matrices = reorder_all_matrices(matrices_dict=matrices)
+
+    return matrices
+
+# Define matrix metadata dictionary globally for reuse
+MATRIX_META = {
+    "sum": ["sum", "Time Intervals", "flow"],
+    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
+    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
+    "ext": ["extent", "Extent", "stock"],
+    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
+    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
+    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
+}
+
+def calculate_trajectory_gee(
+    image_stack: ee.Image,
+    band_names: list,
+) -> ee.Image:
+    """
+    Classify a single pixel trajectory into five categories based on mathematical logic using GEE.
+
+    Parameters
+    ----------
+    image_stack : ee.Image
+        An ee.Image where each band represents a chronological time step.
+    band_names : list
+        A list of strings representing the ordered band names in the stack.
+
+    Returns
+    -------
+    ee.Image
+        An ee.Image containing the classified trajectory codes (1 to 5).
+    """
+    # 1. Extract the start and end images from the stack
+    start_img = image_stack.select(band_names[0])
+    end_img = image_stack.select(band_names[-1])
+
+    # 2. Check if the start class equals the end class
+    start_equals_end = start_img.eq(end_img)
+
+    # 3. Verify if all intermediate values match the start value
+    all_match_start = image_stack.eq(start_img).reduce(ee.Reducer.min())
+
+    # 4. Assign Trajectory 1 for completely stable pixels
+    traj_1 = start_equals_end.And(all_match_start).multiply(1)
+
+    # 5. Assign Trajectory 2 for stable extent with alternation
+    traj_2 = start_equals_end.And(all_match_start.Not()).multiply(2)
+
+    # 6. Identify pixels with extent change
+    extent_change = start_equals_end.Not()
+
+    # 7. Initialize images to track direct transitions and path changes
+    has_direct_transition = ee.Image(0)
+    path_changes = ee.Image(0)
+
+    length = len(band_names)
+
+    # 8. Iterate over the time steps to evaluate transitions
+    for i in range(length - 1):
+        current_band = image_stack.select(band_names[i])
+        next_band = image_stack.select(band_names[i + 1])
+
+        # 9. Check for a direct transition from start to end class
+        is_direct = current_band.eq(start_img).And(next_band.eq(end_img))
+        has_direct_transition = has_direct_transition.Or(is_direct)
+
+        # 10. Increment path changes when the class changes between steps
+        is_change = current_band.neq(next_band)
+        path_changes = path_changes.add(is_change)
+
+    # 11. Assign Trajectory 5 for extent change without direct transition
+    traj_5 = extent_change.And(has_direct_transition.Not()).multiply(5)
+
+    # 12. Assign Trajectory 3 for extent change without alternation
+    traj_3 = extent_change.And(has_direct_transition).And(path_changes.eq(1)).multiply(3)
+
+    # 13. Assign Trajectory 4 for extent change with alternation
+    traj_4 = extent_change.And(has_direct_transition).And(path_changes.gt(1)).multiply(4)
+
+    # 14. Combine all trajectory maps into a single output image
+    trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
+
+    return trajectory_image.rename('trajectory')
+
+def build_glance_stack(
+    year_list: list,
+    collection_id: str,
+    band_name: str,
+    nodata_val: int,
+) -> tuple:
+    """
+    Build an Earth Engine image stack from the specified collection,
+    masking out NoData values.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years to process.
+    collection_id : str
+        The GEE ImageCollection ID.
+    band_name : str
+        The band name to select.
+    nodata_val : int
+        The NoData value to mask out.
+
+    Returns
+    -------
+    tuple
+        A tuple containing the ee.Image stack and the list of band names.
+    """
+    # 1. Initialize lists for image bands and names
+    images = []
+    b_names = []
+
+    # 2. Loop through the requested years
+    for year in year_list:
+        b_name = f"y{year}"
+        b_names.append(b_name)
+
+        # 3. Retrieve the image for the specific year
+        img = ee.ImageCollection(collection_id).filter(
+            ee.Filter.calendarRange(year, year, 'year')
+        ).select(band_name).mosaic()
+
+        # 4. Mask out the NoData value
+        img = img.updateMask(img.neq(nodata_val)).rename(b_name)
+
+        images.append(img)
+
+    # 5. Combine into a single multi-band image
+    stack = ee.Image(images)
+
+    return stack, b_names
+
+
+###############################################################################
+#                                                                             #
+#                  5.1 CHANGE COMPONENTS                                      #
+#                                                                             #
+###############################################################################
+
+def export_interval_transition_matrices_gee(
+    year_list: list,
+    drive_folder: str,
+    collection_id: str,
+    band_name: str,
+    scale: int = 300,
+    nodata_val: int = 255,
+) -> list:
+    """
+    Export LULC transition matrices between consecutive years to Google Drive.
+
+    Parameters
+    ----------
+    year_list : list
+        List of years representing the timeline.
+    drive_folder : str
+        Google Drive folder name for the exported CSV files.
+    collection_id : str
+        GEE ImageCollection ID containing the LULC rasters.
+    band_name : str
+        Band name representing the LULC classes.
+    scale : int, optional
+        Spatial resolution for the export, by default 300.
+    nodata_val : int, optional
+        Value representing NoData/Background to be masked out, by default 255.
+
+    Returns
+    -------
+    list
+        List of submitted ee.batch.Task objects.
+    """
+    tasks = []
+    collection = ee.ImageCollection(collection_id)
+    
+    for i in range(len(year_list) - 1):
+        start_year = year_list[i]
+        end_year = year_list[i + 1]
+        
+        # 1. Filter and extract the LULC images for the specific years
+        img_start = collection.filter(ee.Filter.calendarRange(start_year, start_year, 'year')).first().select(band_name)
+        img_end = collection.filter(ee.Filter.calendarRange(end_year, end_year, 'year')).first().select(band_name)
+        
+        # 2. Mask NoData values
+        img_start = img_start.updateMask(img_start.neq(nodata_val))
+        img_end = img_end.updateMask(img_end.neq(nodata_val))
+        
+        # 3. Create a transition image (StartClass * 100 + EndClass)
+        transition_img = img_start.multiply(100).add(img_end).rename('transition')
+        
+        # 4. Compute the frequency histogram over the globe
+        # Using a global geometry to get the transition matrix
+        histogram = transition_img.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=ee.Geometry.Polygon([-180, -90, 180, 90], None, False),
+            scale=scale,
+            maxPixels=1e13,
+            tileScale=16
+        )
+        
+        # 5. Create a FeatureCollection with a single feature to hold the dictionary
+        feature = ee.Feature(None, histogram)
+        fc = ee.FeatureCollection([feature])
+        
+        # 6. Configure and start the export task
+        task_name = f"transition_{start_year}_{end_year}"
+        task = ee.batch.Export.table.toDrive(
+            collection=fc,
+            description=task_name,
+            folder=drive_folder,
+            fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
+            fileFormat="CSV"
+        )
+        task.start()
+        tasks.append(task)
+        print(f"Task started for transition {start_year}-{end_year} (Scale: {scale}m)")
+        
+    return tasks
+
+def parse_gee_raw_csv(file_path: str) -> pd.DataFrame:
+    """
+    Parse a raw GEE transition CSV into a square Pandas DataFrame matrix.
+    """
+    df_raw = pd.read_csv(file_path)
+    dict_str = None
+    for col in df_raw.columns:
+        val = str(df_raw[col].iloc[0])
+        if val.startswith("{") and "=" in val:
+            dict_str = val
+            break
+
+    if not dict_str:
+        raise ValueError(f"Raw GEE dictionary string not found in {file_path}.")
+
+    dict_str = dict_str.strip("{}")
+    pairs = dict_str.split(", ")
+
+    transitions = {}
+    classes = set()
+
+    for pair in pairs:
+        if not pair:
+            continue
+        k, v = pair.split("=")
+        k_int = int(k)
+        val_float = float(v)
+        # For GLanCE, transition classes are encoded as start * 100 + end
+        s_c = k_int // 100
+        e_c = k_int % 100
+        transitions[(s_c, e_c)] = val_float
+        classes.add(s_c)
+        classes.add(e_c)
+
+    classes_sorted = sorted(list(classes))
+    df_mat = pd.DataFrame(0.0, index=classes_sorted, columns=classes_sorted)
+
+    for (s, e), v in transitions.items():
+        df_mat.at[s, e] = v
+
+    return df_mat
+
+class ComponentCalculator:
+    """
+    Compute change components for a matrix.
+
+    Supports pre-decomposed matrices via force_component parameter.
+    """
+
+    def __init__(self, transition_matrix: np.ndarray) -> None:
+        """
+        Initialize the calculator with a transition matrix.
+
+        Parameters
+        ----------
+        transition_matrix : np.ndarray
+            Square matrix representing transitions.
+        """
+        self.matrix = transition_matrix.astype(float)
+        self.num_classes = transition_matrix.shape[0]
+        self.class_components: list[dict] = []
+
+    def calculate_components(self, force_component: str = None) -> "ComponentCalculator":
+        """
+        Calculate gain, loss, exchange, and shift for all classes.
+
+        Parameters
+        ----------
+        force_component : str, optional
+            If set to "Exchange" or "Shift", forces the interpretation of the
+            matrix content to that specific component.
+
+        Returns
+        -------
+        ComponentCalculator
+            Returns self for chaining.
+        """
+        for class_idx in range(self.num_classes):
+            gain_sum = np.sum(self.matrix[:, class_idx])
+            loss_sum = np.sum(self.matrix[class_idx, :])
+
+            # Standard net change calculation
+            q_gain = max(0.0, gain_sum - loss_sum)
+            q_loss = max(0.0, loss_sum - gain_sum)
+
+            if force_component == "Exchange":
+                exchange = loss_sum - self.matrix[class_idx, class_idx]
+                shift = 0.0
+                q_gain, q_loss = gain_sum - loss_sum, loss_sum - gain_sum
+            elif force_component == "Shift":
+                exchange = 0.0
+                shift = loss_sum - self.matrix[class_idx, class_idx]
+                q_gain, q_loss = 0.0, 0.0
+            else:
+                # Standard Pontius decomposition
+                mutual = np.sum(np.minimum(self.matrix[class_idx, :], self.matrix[:, class_idx]))
+                exchange = mutual - self.matrix[class_idx, class_idx]
+                total_trans = loss_sum - self.matrix[class_idx, class_idx]
+                shift = total_trans - q_loss - exchange
+
+            self.class_components.append({
+                "Quantity_Gain": q_gain,
+                "Quantity_Loss": q_loss,
+                "Exchange_Gain": exchange,
+                "Exchange_Loss": exchange,
+                "Shift_Gain": shift,
+                "Shift_Loss": shift,
+            })
+        return self
+
+
+def _extract_year_str(val) -> str:
+    """
+    Extract the first sequence of digits from a year string or integer.
+
+    Parameters
+    ----------
+    val : str or int
+        The value containing the year (e.g., "time_2000" or 2000).
+
+    Returns
+    -------
+    str
+        The extracted year digits.
+    """
+    match = re.search(r"(\d+)", str(val))
+    return match.group(1) if match else str(val)
+
+
+def process_matrix(
+    matrix_type: str,
+    input_dir: str,
+    years_list: list,
+    class_labels_dict: dict,
+    start_year=None,
+    end_year=None,
+) -> list:
+    """
+    Search for a transition matrix file and calculate its change components.
+
+    Parameters
+    ----------
+    matrix_type : str
+        Type of matrix ("interval", "extent", "sum", etc.).
+    input_dir : str
+        Directory where CSV files are stored.
+    years_list : list
+        List of all years in the timeline.
+    class_labels_dict : dict
+        Dictionary mapping class IDs to metadata.
+    start_year : str or int, optional
+        Start year for interval matrices.
+    end_year : str or int, optional
+        End year for interval matrices.
+
+    Returns
+    -------
+    list[dict]
+        List of dictionaries containing component values per class.
+    """
+    results = []
+    patterns = []
+
+    # 1. Determine naming patterns to search for
+    if matrix_type == "interval":
+        s_str, e_str = str(start_year), str(end_year)
+        patterns.extend([
+            f"transition_{s_str}_{e_str}.csv",
+            f"transition_matrix_{s_str}-{e_str}.csv",
+        ])
+        label_time = f"{s_str}-{e_str}"
+    else:
+        y0_str, yN_str = str(years_list[0]), str(years_list[-1])
+        patterns.extend([
+            f"transition_matrix_{matrix_type}_{y0_str}-{yN_str}.csv",
+        ])
+        label_time = matrix_type
+
+    # 2. Find the existing file in the main directory
+    full_path = None
+    for p in patterns:
+        path = os.path.join(input_dir, p)
+        if os.path.exists(path):
+            full_path = path
+            break
+
+    if not full_path:
+        return []
+
+    # 3. Process components
+    force_comp = (
+        "Exchange" if "exchange" in matrix_type else ("Shift" if "shift" in matrix_type else None)
+    )
+
+    # Load matrix safely handling standard square CSVs or raw GEE dict formats
+    try:
+        df_mat = pd.read_csv(full_path, index_col=0)
+        if df_mat.shape[1] > 0 and isinstance(df_mat.iloc[0, 0], str) and df_mat.iloc[0, 0].startswith("{"):
+            raise ValueError("Raw GEE format detected")
+    except (ValueError, TypeError):
+        # Assumes parse_gee_raw_csv is defined in utils.py from the previous step
+        df_mat = parse_gee_raw_csv(full_path)
+
+    calc = ComponentCalculator(df_mat.values).calculate_components(force_component=force_comp)
+
+    for idx, class_id in enumerate([int(c) for c in df_mat.index]):
+        cls_name = class_labels_dict.get(class_id, {}).get("name", f"Class {class_id}")
+        comp_vals = calc.class_components[idx]
+
+        for comp_name in ["Quantity", "Exchange", "Shift"]:
+            label_comp = comp_name
+            if matrix_type in ["extent", "sum"]:
+                label_comp = f"Allocation_{comp_name}"
+            if "alternation" in matrix_type:
+                label_comp = f"Alternation_{comp_name}"
+
+            results.append({
+                "Time_Interval": label_time,
+                "Class": cls_name,
+                "Component": label_comp,
+                "Gain": comp_vals[f"{comp_name}_Gain"],
+                "Loss": comp_vals[f"{comp_name}_Loss"],
+            })
+    return results
 
 def generate_all_heatmaps(
     matrices_dict: dict,
@@ -4731,269 +5315,6 @@ def generate_all_heatmaps(
             f"-> Saved heatmap: {out_file}",
         )
 
-
-
-def export_quantity_component_task_gee(
-    year_list: list,
-    drive_folder: str,
-    scale: int = 300,
-    nodata_val: int = 255,
-) -> ee.batch.Task:
-    """
-    Compute and export a raster representing the Quantity Component of change using GEE.
-
-    A pixel's quantity component is 1 when the begin class differs from
-    the finish class; otherwise, it is 0.
-
-    Parameters
-    ----------
-    year_list : list
-        List of years representing the timeline.
-    drive_folder : str
-        Google Drive folder name for exports.
-    scale : int, optional
-        Spatial resolution in meters, by default 300.
-    nodata_val : int, optional
-        NoData value to be used for masking, by default 255.
-
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine export task.
-    """
-    # 1. Fetch start and end years
-    start_year = year_list[0]
-    end_year = year_list[-1]
-
-    # 2. Fetch start and end images directly from the collection
-    # Note: GLANCE_COLLECTION_ID and GLANCE_CLASS_BAND must be defined in utils.py
-    start_img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-        ee.Filter.calendarRange(start_year, start_year, 'year')
-    ).select(GLANCE_CLASS_BAND).mosaic()
-    start_img = start_img.updateMask(start_img.neq(nodata_val))
-
-    end_img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-        ee.Filter.calendarRange(end_year, end_year, 'year')
-    ).select(GLANCE_CLASS_BAND).mosaic()
-    end_img = end_img.updateMask(end_img.neq(nodata_val))
-
-    # 3. Compute Quantity Component: 1 if start != end, else 0
-    quantity_image = start_img.neq(end_img).multiply(1).toUint8()
-
-    # 4. Apply NoData unmasking and set the system:no_data_value property
-    quantity_image = quantity_image.unmask(nodata_val)
-    quantity_image = quantity_image.set('system:no_data_value', nodata_val)
-
-    # 5. Define a global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None, False
-    )
-
-    # 6. Define the Earth Engine export task
-    task_desc = f"Quantity_Component_{start_year}_{end_year}"
-    task = ee.batch.Export.image.toDrive(
-        image=quantity_image,
-        description=task_desc,
-        folder=drive_folder,
-        scale=scale,
-        region=global_region,
-        maxPixels=1e13,
-    )
-
-    # 7. Start the export task
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
-
-    return task
-
-def plot_quantity_component_map(
-    output_dir: str,
-    nodata_val: int,
-    raster_filename: str,
-    scale_factor: float = 0.05,
-) -> None:
-    """
-    Plot the Quantity Component (Extent Change) raster map with cartographic elements.
-
-    Parameters
-    ----------
-    output_dir : str
-        Directory containing the exported GEE tiles and where the map will be saved.
-    nodata_val : int
-        Value representing NoData in the raster to be masked out.
-    raster_filename : str
-        Prefix of the raster tiles to plot.
-    scale_factor : float, optional
-        Scale factor to downsample the massive global raster to fit into memory.
-
-    Returns
-    -------
-    None
-    """
-    # 1. Locate all raster tiles exported by GEE
-    raster_files = glob.glob(os.path.join(output_dir, f"{raster_filename}*.tif"))
-    if not raster_files:
-        raise FileNotFoundError(
-            f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
-        )
-
-    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
-    vrt_path = os.path.join(output_dir, "merged_quantity.vrt")
-    files_str = " ".join([f'"{f}"' for f in raster_files])
-    os.system(f"gdalbuildvrt {vrt_path} {files_str}")
-
-    # 3. Calculate pixel size for scale bar
-    # Assumes compute_display_pixel_size_km is defined in the same module
-    pixel_size_km = compute_display_pixel_size_km(
-        raster_path=vrt_path,
-        downsample_factor=scale_factor,
-    )
-
-    # 4. Read raster and basic metadata with downsampling
-    with rasterio.open(vrt_path) as src:
-        out_shape = (
-            max(1, int(src.height * scale_factor)),
-            max(1, int(src.width * scale_factor)),
-        )
-        data = src.read(
-            1,
-            out_shape=out_shape,
-            resampling=rasterio.enums.Resampling.nearest,
-        )
-
-        # Force masking using the provided nodata value
-        data = np.ma.masked_equal(data, nodata_val)
-
-        src_crs = src.crs
-        # Adjust the affine transform for the new downsampled resolution
-        transform = src.transform * src.transform.scale(
-            (src.width / data.shape[1]),
-            (src.height / data.shape[0]),
-        )
-        height, width = data.shape
-
-    # 5. Figure
-    fig, ax = plt.subplots(figsize=(20, 10), dpi=300)
-
-    # 6. Colormap for 0 and 1
-    cmap = ListedColormap(["#c0c0c0", "#fde725"])
-    bounds = [-0.5, 0.5, 1.5]
-    norm = BoundaryNorm(bounds, cmap.N)
-
-    # 7. Plot raster
-    ax.imshow(
-        data,
-        cmap=cmap,
-        interpolation="nearest",
-        norm=norm,
-    )
-
-    # 8. Legend (adapted for 0 and 1 only)
-    legend_elements = [
-        Patch(
-            facecolor="#c0c0c0",
-            label="0",
-            edgecolor="black",
-            linewidth=0,
-        ),
-        Patch(
-            facecolor="#fde725",
-            label="1",
-            edgecolor="black",
-            linewidth=0,
-        ),
-    ]
-
-    ax.legend(
-        handles=legend_elements,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        frameon=False,
-        fontsize=14,
-        borderpad=1.2,
-        title="Change",
-        title_fontsize=14,
-        alignment="left",
-        handletextpad=0.8,
-        columnspacing=2,
-        labelspacing=0.8,
-        handlelength=2.0,
-        handleheight=1.5,
-    )
-
-    # 9. Cartographic elements
-    degree_in_meters = 111320.0
-    dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
-
-    def km_formatter(value, unit):
-        if unit == "Mm":
-            return f"{int(value * 1000)} km"
-        return f"{int(value)} {unit}"
-
-    scalebar = ScaleBar(
-        dx=dx_meters,
-        units="m",
-        length_fraction=0.15,
-        location="lower left",
-        box_alpha=0.6,
-        scale_formatter=km_formatter,
-    )
-    ax.add_artist(scalebar)
-
-    try:
-        # Assumes north_arrow is defined in the same module
-        north_arrow(
-            ax,
-            location="upper right",
-            shadow=False,
-            rotation={"degrees": 0},
-            scale=0.5,
-        )
-    except NameError:
-        print("north_arrow function not found. Skipping north arrow.")
-
-    # 10. Axes styling
-    ax.set_title("Extent Change", fontsize=18, pad=10)
-    ax.set_aspect("equal")
-
-    to_latlon = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
-
-    def format_lon(x, pos):
-        x = np.clip(x, 0, width - 1)
-        x_proj, y_proj = rasterio.transform.xy(transform, height // 2, x)
-        lon, _ = to_latlon.transform(x_proj, y_proj)
-        return f"{lon:.1f}°"
-
-    def format_lat(y, pos):
-        y = np.clip(y, 0, height - 1)
-        x_proj, y_proj = rasterio.transform.xy(transform, y, width // 2)
-        _, lat = to_latlon.transform(x_proj, y_proj)
-        return f"{lat:.1f}°"
-
-    ax.xaxis.set_major_formatter(FuncFormatter(format_lon))
-    ax.yaxis.set_major_formatter(FuncFormatter(format_lat))
-
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
-
-    ax.tick_params(axis="both", which="major", labelsize=10, pad=4)
-    plt.setp(ax.get_yticklabels(), rotation=90, va="center")
-
-    # 11. Save and Show
-    maps_dir = os.path.join(output_dir, "maps")
-    os.makedirs(maps_dir, exist_ok=True)
-    output_figure_path = os.path.join(maps_dir, "map_extent_change.png")
-
-    plt.savefig(
-        output_figure_path,
-        dpi=300,
-        bbox_inches="tight",
-        format="png",
-        pad_inches=0.5,
-    )
-    plt.show()
-    print(f"Map figure saved successfully to: {output_figure_path}")
 
 def export_alternation_exchange_task_gee(
     year_list: list,
@@ -5579,106 +5900,7 @@ def plot_alternation_shift_map(
     )
     plt.show()
     print(f"Map figure saved successfully to: {output_figure_path}")
-###############################################################################
-#                                                                             #
-#                  5.1 TRANSITION MATRIX                                      #
-#                                                                             #
-###############################################################################
-def export_global_transition_tasks(
-    year_list,
-    drive_folder="GLANCE_Transitions",
-    scale=30
-):
-    """
-    Triggers asynchronous GEE tasks to export global transition matrices.
 
-    Each task computes a frequency histogram for a year pair and saves 
-    the result as a CSV file in a specific Google Drive folder.
-
-    Parameters
-    ----------
-    year_list : list of int
-        List of years to process (e.g., [2001, 2010, 2019]).
-    drive_folder : str, optional
-        Name of the folder in Google Drive to save the CSVs. 
-        Defaults to "GLANCE_Transitions".
-    scale : int, optional
-        Spatial resolution in meters. Use 30 for native resolution. 
-        Defaults to 30.
-
-    Returns
-    -------
-    list of ee.batch.Task
-        A list of triggered Earth Engine Task objects for monitoring.
-    """
-    # 1. Initialize Earth Engine resources using constants from utils.py
-    collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
-    global_geom = ee.Geometry.Rectangle(
-        [-180, -90, 180, 90], 
-        'EPSG:4326', 
-        False
-    )
-    
-    # 2. Define transition pairs (consecutive intervals)
-    pairs = [
-        (year_list[i], year_list[i+1]) 
-        for i in range(len(year_list) - 1)
-    ]
-    
-    # 3. Add long-term transition pair (First Year to Last Year)
-    if len(year_list) > 2:
-        pairs.append(
-            (year_list[0], year_list[-1])
-        )
-    
-    triggered_tasks = []
-
-    # 4. Iterate through each pair to define and start export tasks
-    for y1, y2 in pairs:
-        label = f"transition_{y1}_{y2}"
-        
-        # 5. Filter and mosaic images for the start and end years
-        img_start = collection.filterDate(
-            f"{y1}-01-01", 
-            f"{y1}-12-31"
-        ).mosaic().select(GLANCE_CLASS_BAND)
-        
-        img_end = collection.filterDate(
-            f"{y2}-01-01", 
-            f"{y2}-12-31"
-        ).mosaic().select(GLANCE_CLASS_BAND)
-
-        # 6. Create transition image: (Start * 100) + End
-        transition_image = img_start.multiply(100).add(img_end)
-
-        # 7. Reduce the image to a frequency histogram (Table format)
-        # Using a Feature to wrap the result for CSV export
-        transition_stats = transition_image.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
-            geometry=global_geom,
-            scale=scale,
-            maxPixels=1e13
-        )
-
-        # 8. Create a feature collection with the statistics for export
-        feature = ee.Feature(None, transition_stats)
-        fc = ee.FeatureCollection([feature])
-
-        # 9. Configure the Batch Export Task to Google Drive
-        task = ee.batch.Export.table.toDrive(
-            collection=fc,
-            description=label,
-            folder=drive_folder,
-            fileNamePrefix=label,
-            fileFormat='CSV'
-        )
-
-        # 10. Start the task on the server and store the object
-        task.start()
-        triggered_tasks.append(task)
-        print(f"Task started for {label} (Scale: {scale}m)")
-
-    return triggered_tasks
 
 ###############################################################################
 #                                                                             #
@@ -6229,48 +6451,5 @@ def _unit_formatter(
 
     return mticker.FuncFormatter(_fmt)
 
-def label_id_to_name(
-    labels: Iterable[str],
-    class_labels_dict: dict,
-) -> list[str]:
-    """
-    Map class ID strings to human-readable names using class_labels_dict.
 
-    Parameters
-    ----------
-    labels : Iterable[str]
-        Class IDs as strings (e.g. ["1", "2", "3"]).
-    class_labels_dict : dict
-        Dictionary containing metadata for each class ID.
-
-    Returns
-    -------
-    list[str]
-        List of class names mapped from IDs.
-    """
-    id_to_name = {
-        int(k): v.get(
-            "rename",
-            v.get(
-                "name",
-                str(k),
-            ),
-        )
-        for k, v in class_labels_dict.items()
-    }
-
-    names: list[str] = []
-    for lab in labels:
-        try:
-            cid = int(str(lab))
-            names.append(
-                id_to_name.get(
-                    cid,
-                    str(lab),
-                ),
-            )
-        except Exception:
-            names.append(str(lab))
-
-    return names
 
