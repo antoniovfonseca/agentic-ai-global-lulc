@@ -3102,6 +3102,58 @@ def generate_change_components_table(
 # 6.4 HEAT MAPS
 # ---------------------------------------------------------------------------
 
+def validate_and_get_interval(
+    years: List[int],
+    output_path: str,
+    class_labels_dict: Dict[int, str]
+) -> str:
+    """
+    Validates global inputs and generates an interval string based on years.
+
+    Parameters
+    ----------
+    years : list of int
+        List of years to process.
+    output_path : str
+        Directory path for outputs.
+    class_labels_dict : dict
+        Dictionary mapping class values to labels.
+
+    Returns
+    -------
+    str
+        The formatted interval string (e.g., '2001-2019').
+
+    Raises
+    ------
+    ValueError
+        If any of the inputs are invalid or missing.
+    """
+    if not (isinstance(years, (list, tuple)) and len(years) >= 2):
+        raise ValueError("`years` missing, invalid, or contains fewer than 2 elements.")
+    
+    if not (isinstance(output_path, str) and output_path):
+        raise ValueError("`output_path` missing or invalid.")
+        
+    if not (isinstance(class_labels_dict, dict) and class_labels_dict):
+        raise ValueError("`class_labels_dict` missing or invalid.")
+
+    str_y0 = _extract_year_str(years[0])
+    str_y1 = _extract_year_str(years[-1])
+
+    return f"{str_y0}-{str_y1}"
+
+# Define matrix metadata dictionary
+MATRIX_META: Dict[str, list] = {
+    "sum": ["sum", "Time Intervals", "flow"],
+    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
+    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
+    "ext": ["extent", "Extent", "stock"],
+    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
+    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
+    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
+}
+
 def _extract_year_str(val: Union[str, int]) -> str:
     """
     Extract the first sequence of digits from a year string or integer.
@@ -4701,64 +4753,656 @@ def plot_quantity_component_map(
     plt.show()
     print(f"Map figure saved successfully to: {output_figure_path}")
 
-
-
-
-
-
-
-
-def validate_and_get_interval(
-    years: List[int],
-    output_path: str,
-    class_labels_dict: Dict[int, str]
-) -> str:
+def export_alternation_exchange_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = 255,
+) -> ee.batch.Task:
     """
-    Validates global inputs and generates an interval string based on years.
+    Compute and export a raster representing the Alternation Exchange Component using GEE.
+    This replaces the local block-by-block Numba matrix calculation.
 
     Parameters
     ----------
-    years : list of int
+    year_list : list
         List of years to process.
-    output_path : str
-        Directory path for outputs.
-    class_labels_dict : dict
-        Dictionary mapping class values to labels.
+    drive_folder : str
+        Google Drive folder name for exports.
+    scale : int, optional
+        Spatial resolution in meters, by default 300.
+    nodata_val : int, optional
+        NoData value to be used for masking, by default 255.
 
     Returns
     -------
-    str
-        The formatted interval string (e.g., '2001-2019').
-
-    Raises
-    ------
-    ValueError
-        If any of the inputs are invalid or missing.
+    ee.batch.Task
+        The submitted Earth Engine export task.
     """
-    if not (isinstance(years, (list, tuple)) and len(years) >= 2):
-        raise ValueError("`years` missing, invalid, or contains fewer than 2 elements.")
-    
-    if not (isinstance(output_path, str) and output_path):
-        raise ValueError("`output_path` missing or invalid.")
-        
-    if not (isinstance(class_labels_dict, dict) and class_labels_dict):
-        raise ValueError("`class_labels_dict` missing or invalid.")
+    print(f"Preparing Alternation Exchange GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    str_y0 = _extract_year_str(years[0])
-    str_y1 = _extract_year_str(years[-1])
+    # 1. Fetch all images in the time series
+    # Note: GLANCE_COLLECTION_ID and GLANCE_CLASS_BAND must be defined in utils.py
+    imgs = []
+    for y in year_list:
+        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+            ee.Filter.calendarRange(y, y, 'year')
+        ).select(GLANCE_CLASS_BAND).mosaic()
+        img = img.updateMask(img.neq(nodata_val))
+        imgs.append(img)
 
-    return f"{str_y0}-{str_y1}"
+    # 2. Get unique classes from metadata
+    # Note: GLANCE_METADATA must be defined in utils.py
+    classes = list(GLANCE_METADATA.keys())
 
-# Define matrix metadata dictionary
-MATRIX_META: Dict[str, list] = {
-    "sum": ["sum", "Time Intervals", "flow"],
-    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
-    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
-    "ext": ["extent", "Extent", "stock"],
-    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
-    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
-    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
-}
+    # 3. Accumulate total exchange
+    total_exchange = ee.Image(0).toUint8()
+
+    # Loop through all unique pairs of classes to find A->B and B->A exchanges
+    for i in range(len(classes)):
+        for j in range(i + 1, len(classes)):
+            class_a = classes[i]
+            class_b = classes[j]
+
+            count_a_b = ee.Image(0)
+            count_b_a = ee.Image(0)
+
+            # Sum transitions over time
+            for t in range(len(imgs) - 1):
+                img_t = imgs[t]
+                img_t1 = imgs[t+1]
+
+                # Transition A -> B
+                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
+                count_a_b = count_a_b.add(trans_a_b)
+
+                # Transition B -> A
+                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
+                count_b_a = count_b_a.add(trans_b_a)
+
+            # Exchange for this pair is min(A->B, B->A)
+            # Multiplied by 2 because both directions contribute to the total exchange
+            # (matching the original Numba matrix addition logic)
+            pair_exchange = count_a_b.min(count_b_a).multiply(2)
+
+            total_exchange = total_exchange.add(pair_exchange)
+
+    # 4. Apply NoData and set properties
+    total_exchange = total_exchange.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
+
+    # 5. Define and start the Earth Engine export task
+    task_desc = f"Alternation_Exchange_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.image.toDrive(
+        image=total_exchange,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=GLOBAL_GEOM,
+        maxPixels=1e13,
+    )
+
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
+    return task
+
+def plot_alternation_exchange_map(
+    output_dir: str,
+    nodata_val: int,
+    raster_filename: str,
+    scale_factor: float = 0.05,
+) -> None:
+    """
+    Plot the Alternation Exchange raster map with cartographic elements.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing the exported GEE tiles and where the map will be saved.
+    nodata_val : int
+        Value representing NoData in the raster to be masked out.
+    raster_filename : str
+        Prefix of the raster tiles to plot.
+    scale_factor : float, optional
+        Scale factor to downsample the massive global raster to fit into memory.
+
+    Returns
+    -------
+    None
+    """
+    # 1. Locate all raster tiles exported by GEE
+    raster_files = glob.glob(os.path.join(
+        output_dir,
+        f"{raster_filename}*.tif")
+    )
+    if not raster_files:
+        raise FileNotFoundError(
+            f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
+        )
+
+    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
+    vrt_path = os.path.join(
+        output_dir,
+        "merged_exchange.vrt"
+    )
+    files_str = " ".join([f'"{f}"' for f in raster_files])
+    os.system(f"gdalbuildvrt {vrt_path} {files_str}")
+
+    # 3. Calculate pixel size for scale bar
+    pixel_size_km = compute_display_pixel_size_km(
+        raster_path=vrt_path,
+        downsample_factor=scale_factor,
+    )
+
+    # 4. Read raster and basic metadata with downsampling
+    with rasterio.open(vrt_path) as src:
+        out_shape = (
+            max(1, int(src.height * scale_factor)),
+            max(1, int(src.width * scale_factor)),
+        )
+        data = src.read(
+            1,
+            out_shape=out_shape,
+            resampling=rasterio.enums.Resampling.nearest,
+        )
+
+        # Force masking using the provided nodata value
+        data_masked = np.ma.masked_equal(
+            data,
+            nodata_val
+        )
+
+        src_crs = src.crs
+        # Adjust the affine transform for the new downsampled resolution
+        transform = src.transform * src.transform.scale(
+            (src.width / data.shape[1]),
+            (src.height / data.shape[0]),
+        )
+        height, width = data.shape
+
+    # 5. Figure
+    fig, ax = plt.subplots(
+        figsize=(20, 10),
+        dpi=300
+    )
+
+    # Determine max value for colormap
+    try:
+        data_max = int(np.ma.max(data_masked))
+    except:
+        data_max = 1
+
+    if data_max <= 0:
+        data_max = 1
+
+    # 6. Discrete Colormap Configuration
+    original_cmap = plt.get_cmap("viridis_r")
+    # Define the color for value 0 (Background/Gray)
+    colors_list = ["#c0c0c0"] + [
+        original_cmap(i) for i in np.linspace(0, 1, data_max)
+    ]
+    cmap = ListedColormap(colors_list)
+    bounds = np.arange(-0.5, data_max + 1.5, 1)
+    norm = BoundaryNorm(bounds, cmap.N)
+
+    # 7. Plot raster
+    ax.imshow(
+        data_masked,
+        cmap=cmap,
+        interpolation="nearest",
+        norm=norm,
+    )
+
+    # 8. Legend Configuration
+    legend_elements = []
+
+    # Extract unique values actually present in the masked raster data
+    present_values = np.unique(data_masked.compressed())
+
+    for i in range(0, data_max + 1):
+        # Append to legend ONLY if the value is present in the map
+        if i in present_values:
+            legend_elements.append(
+                Patch(
+                    facecolor=cmap(norm(i)),
+                    edgecolor="none",
+                    linewidth=0,
+                    label=str(i),
+                ),
+            )
+
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+        fontsize=12,
+        borderpad=1.2,
+        title="Exchange",
+        title_fontsize=14,
+        alignment="left",
+        handletextpad=0.8,
+        columnspacing=2,
+        labelspacing=0.8,
+        handlelength=2.0,
+        handleheight=1.5,
+    )
+
+    # 9. Cartographic elements
+    degree_in_meters = 111320.0
+    dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
+
+    def km_formatter(value, unit):
+        if unit == "Mm":
+            return f"{int(value * 1000)} km"
+        return f"{int(value)} {unit}"
+
+    scalebar = ScaleBar(
+        dx=dx_meters,
+        units="m",
+        length_fraction=0.15,
+        location="lower left",
+        box_alpha=0.6,
+        scale_formatter=km_formatter,
+    )
+    ax.add_artist(scalebar)
+
+    try:
+        north_arrow(
+            ax,
+            location="upper right",
+            shadow=False,
+            rotation={"degrees": 0},
+            scale=0.5,
+        )
+    except NameError:
+        print("north_arrow function not found. Skipping north arrow.")
+
+    # 10. Axes styling
+    ax.set_title(
+        "Alternation Exchange",
+        fontsize=18,
+        pad=10
+    )
+    ax.set_aspect("equal")
+
+    to_latlon = Transformer.from_crs(
+        src_crs,
+        "EPSG:4326",
+        always_xy=True
+    )
+
+    def format_lon(x, pos):
+        x = np.clip(x, 0, width - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, height // 2, x)
+        lon, _ = to_latlon.transform(x_proj, y_proj)
+        return f"{lon:.1f}°"
+
+    def format_lat(y, pos):
+        y = np.clip(y, 0, height - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, y, width // 2)
+        _, lat = to_latlon.transform(x_proj, y_proj)
+        return f"{lat:.1f}°"
+
+    ax.xaxis.set_major_formatter(FuncFormatter(format_lon))
+    ax.yaxis.set_major_formatter(FuncFormatter(format_lat))
+
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=10,
+        pad=4
+    )
+    plt.setp(
+        ax.get_yticklabels(),
+        rotation=90,
+        va="center"
+    )
+
+    # 11. Save and Show
+    maps_dir = os.path.join(
+        output_dir,
+        "maps"
+    )
+    os.makedirs(
+        maps_dir,
+        exist_ok=True
+    )
+    output_figure_path = os.path.join(
+        maps_dir,
+        "map_alternation_exchange.png"
+    )
+
+    plt.savefig(
+        output_figure_path,
+        dpi=300,
+        bbox_inches="tight",
+        format="png",
+        pad_inches=0.5,
+    )
+    plt.show()
+    print(f"Map figure saved successfully to: {output_figure_path}")
+
+def export_alternation_shift_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = NODATA_VALUE,
+) -> ee.batch.Task:
+    """
+    Compute and export a raster representing the Alternation Shift Component using GEE.
+    Calculated as: Total Changes - Quantity (Extension) - Total Exchange.
+    """
+    print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
+
+    # 1. Fetch all images in the time series
+    imgs = []
+    for y in year_list:
+        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
+            ee.Filter.calendarRange(y, y, 'year')
+        ).select(GLANCE_CLASS_BAND).mosaic()
+        img = img.updateMask(img.neq(nodata_val))
+        imgs.append(img)
+
+    # 2. Calculate Total Changes across all intervals
+    total_changes = ee.Image(0).toUint8()
+    for t in range(len(imgs) - 1):
+        change = imgs[t].neq(imgs[t+1])
+        total_changes = total_changes.add(change)
+
+    # 3. Calculate Quantity Component (start != end)
+    quantity = imgs[0].neq(imgs[-1]).toUint8()
+
+    # 4. Calculate Total Exchange
+    classes = list(GLANCE_METADATA.keys())
+    total_exchange = ee.Image(0).toUint8()
+
+    for i in range(len(classes)):
+        for j in range(i + 1, len(classes)):
+            class_a = classes[i]
+            class_b = classes[j]
+
+            count_a_b = ee.Image(0)
+            count_b_a = ee.Image(0)
+
+            for t in range(len(imgs) - 1):
+                img_t = imgs[t]
+                img_t1 = imgs[t+1]
+
+                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
+                count_a_b = count_a_b.add(trans_a_b)
+
+                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
+                count_b_a = count_b_a.add(trans_b_a)
+
+            pair_exchange = count_a_b.min(count_b_a).multiply(2)
+            total_exchange = total_exchange.add(pair_exchange)
+
+    # 5. Calculate Alternation Shift (Changes - Quantity - Exchange)
+    # .max(0) ensures no negative values if discrepancies arise
+    shift = total_changes.subtract(quantity).subtract(total_exchange).max(0).toUint8()
+
+    # 6. Apply NoData and set properties
+    shift = shift.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
+
+    # 7. Define and start the Earth Engine export task
+    task_desc = f"Alternation_Shift_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.image.toDrive(
+        image=shift,
+        description=task_desc,
+        folder=drive_folder,
+        scale=scale,
+        region=GLOBAL_GEOM,
+        maxPixels=1e13,
+    )
+
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
+    return task
+
+def plot_alternation_shift_map(
+    output_dir: str,
+    nodata_val: int,
+    raster_filename: str,
+    scale_factor: float = 0.05,
+) -> None:
+    """
+    Plot the Alternation Shift raster map with cartographic elements.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing the exported GEE tiles and where the map will be saved.
+    nodata_val : int
+        Value representing NoData in the raster to be masked out.
+    raster_filename : str
+        Prefix of the raster tiles to plot.
+    scale_factor : float, optional
+        Scale factor to downsample the massive global raster to fit into memory.
+
+    Returns
+    -------
+    None
+    """
+    # 1. Locate all raster tiles exported by GEE
+    raster_files = glob.glob(os.path.join(
+        output_dir,
+        f"{raster_filename}*.tif")
+    )
+    if not raster_files:
+        raise FileNotFoundError(
+            f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
+        )
+
+    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
+    vrt_path = os.path.join(
+        output_dir,
+        "merged_shift.vrt"
+    )
+    files_str = " ".join([f'"{f}"' for f in raster_files])
+    os.system(f"gdalbuildvrt {vrt_path} {files_str}")
+
+    # 3. Calculate pixel size for scale bar
+    pixel_size_km = compute_display_pixel_size_km(
+        raster_path=vrt_path,
+        downsample_factor=scale_factor,
+    )
+
+    # 4. Read raster and basic metadata with downsampling
+    with rasterio.open(vrt_path) as src:
+        out_shape = (
+            max(1, int(src.height * scale_factor)),
+            max(1, int(src.width * scale_factor)),
+        )
+        data = src.read(
+            1,
+            out_shape=out_shape,
+            resampling=rasterio.enums.Resampling.nearest,
+        )
+
+        # Force masking using the provided nodata value
+        data_masked = np.ma.masked_equal(data, nodata_val)
+
+        src_crs = src.crs
+        # Adjust the affine transform for the new downsampled resolution
+        transform = src.transform * src.transform.scale(
+            (src.width / data.shape[1]),
+            (src.height / data.shape[0]),
+        )
+        height, width = data.shape
+
+    # 5. Figure
+    fig, ax = plt.subplots(
+        figsize=(20, 10),
+        dpi=300
+    )
+
+    # Determine max value for colormap
+    try:
+        data_max = int(np.ma.max(data_masked))
+    except:
+        data_max = 1
+
+    if data_max <= 0:
+        data_max = 1
+
+    # 6. Discrete Colormap Configuration
+    original_cmap = plt.get_cmap("viridis_r")
+    # Define the color for value 0 (Background/Gray)
+    colors_list = ["#c0c0c0"] + [
+        original_cmap(i) for i in np.linspace(0, 1, data_max)
+    ]
+    cmap = ListedColormap(colors_list)
+    bounds = np.arange(-0.5, data_max + 1.5, 1)
+    norm = BoundaryNorm(bounds, cmap.N)
+
+    # 7. Plot raster
+    ax.imshow(
+        data_masked,
+        cmap=cmap,
+        interpolation="nearest",
+        norm=norm,
+    )
+
+    # 8. Legend Configuration
+    legend_elements = []
+
+    # Extract unique values actually present in the masked raster data
+    present_values = np.unique(data_masked.compressed())
+
+    for i in range(0, data_max + 1):
+        # Append to legend ONLY if the value is present in the map
+        if i in present_values:
+            legend_elements.append(
+                Patch(
+                    facecolor=cmap(norm(i)),
+                    edgecolor="none",
+                    linewidth=0,
+                    label=str(i),
+                ),
+            )
+
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+        fontsize=12,
+        borderpad=1.2,
+        title="Shift",
+        title_fontsize=14,
+        alignment="left",
+        handletextpad=0.8,
+        columnspacing=2,
+        labelspacing=0.8,
+        handlelength=2.0,
+        handleheight=1.5,
+    )
+
+    # 9. Cartographic elements
+    degree_in_meters = 111320.0
+    dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
+
+    def km_formatter(value, unit):
+        if unit == "Mm":
+            return f"{int(value * 1000)} km"
+        return f"{int(value)} {unit}"
+
+    scalebar = ScaleBar(
+        dx=dx_meters,
+        units="m",
+        length_fraction=0.15,
+        location="lower left",
+        box_alpha=0.6,
+        scale_formatter=km_formatter,
+    )
+    ax.add_artist(scalebar)
+
+    try:
+        north_arrow(
+            ax,
+            location="upper right",
+            shadow=False,
+            rotation={"degrees": 0},
+            scale=0.5,
+        )
+    except NameError:
+        print("north_arrow function not found. Skipping north arrow.")
+
+    # 10. Axes styling
+    ax.set_title(
+        "Alternation Shift",
+        fontsize=18,
+        pad=10
+    )
+    ax.set_aspect("equal")
+
+    to_latlon = Transformer.from_crs(
+        src_crs,
+        "EPSG:4326",
+        always_xy=True
+    )
+
+    def format_lon(x, pos):
+        x = np.clip(x, 0, width - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, height // 2, x)
+        lon, _ = to_latlon.transform(x_proj, y_proj)
+        return f"{lon:.1f}°"
+
+    def format_lat(y, pos):
+        y = np.clip(y, 0, height - 1)
+        x_proj, y_proj = rasterio.transform.xy(transform, y, width // 2)
+        _, lat = to_latlon.transform(x_proj, y_proj)
+        return f"{lat:.1f}°"
+
+    ax.xaxis.set_major_formatter(FuncFormatter(format_lon))
+    ax.yaxis.set_major_formatter(FuncFormatter(format_lat))
+
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=10,
+        pad=4
+    )
+    plt.setp(
+        ax.get_yticklabels(),
+        rotation=90,
+        va="center"
+    )
+
+    # 11. Save and Show
+    maps_dir = os.path.join(
+        output_dir,
+        "maps"
+    )
+    os.makedirs(
+        maps_dir,
+        exist_ok=True
+    )
+    output_figure_path = os.path.join(
+        maps_dir,
+        "map_alternation_shift.png"
+    )
+
+    plt.savefig(
+        output_figure_path,
+        dpi=300,
+        bbox_inches="tight",
+        format="png",
+        pad_inches=0.5,
+    )
+    plt.show()
+    print(f"Map figure saved successfully to: {output_figure_path}")
+
+
+
+
+
 
 def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, Any]:
     """
@@ -5316,590 +5960,9 @@ def generate_all_heatmaps(
         )
 
 
-def export_alternation_exchange_task_gee(
-    year_list: list,
-    drive_folder: str,
-    scale: int = 300,
-    nodata_val: int = 255,
-) -> ee.batch.Task:
-    """
-    Compute and export a raster representing the Alternation Exchange Component using GEE.
-    This replaces the local block-by-block Numba matrix calculation.
 
-    Parameters
-    ----------
-    year_list : list
-        List of years to process.
-    drive_folder : str
-        Google Drive folder name for exports.
-    scale : int, optional
-        Spatial resolution in meters, by default 300.
-    nodata_val : int, optional
-        NoData value to be used for masking, by default 255.
 
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine export task.
-    """
-    print(f"Preparing Alternation Exchange GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Fetch all images in the time series
-    # Note: GLANCE_COLLECTION_ID and GLANCE_CLASS_BAND must be defined in utils.py
-    imgs = []
-    for y in year_list:
-        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-            ee.Filter.calendarRange(y, y, 'year')
-        ).select(GLANCE_CLASS_BAND).mosaic()
-        img = img.updateMask(img.neq(nodata_val))
-        imgs.append(img)
-
-    # 2. Get unique classes from metadata
-    # Note: GLANCE_METADATA must be defined in utils.py
-    classes = list(GLANCE_METADATA.keys())
-
-    # 3. Accumulate total exchange
-    total_exchange = ee.Image(0).toUint8()
-
-    # Loop through all unique pairs of classes to find A->B and B->A exchanges
-    for i in range(len(classes)):
-        for j in range(i + 1, len(classes)):
-            class_a = classes[i]
-            class_b = classes[j]
-
-            count_a_b = ee.Image(0)
-            count_b_a = ee.Image(0)
-
-            # Sum transitions over time
-            for t in range(len(imgs) - 1):
-                img_t = imgs[t]
-                img_t1 = imgs[t+1]
-
-                # Transition A -> B
-                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
-                count_a_b = count_a_b.add(trans_a_b)
-
-                # Transition B -> A
-                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
-                count_b_a = count_b_a.add(trans_b_a)
-
-            # Exchange for this pair is min(A->B, B->A)
-            # Multiplied by 2 because both directions contribute to the total exchange
-            # (matching the original Numba matrix addition logic)
-            pair_exchange = count_a_b.min(count_b_a).multiply(2)
-
-            total_exchange = total_exchange.add(pair_exchange)
-
-    # 4. Apply NoData and set properties
-    total_exchange = total_exchange.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
-
-    # 5. Define a global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None, False
-    )
-
-    # 6. Define and start the Earth Engine export task
-    task_desc = f"Alternation_Exchange_{year_list[0]}_{year_list[-1]}"
-    task = ee.batch.Export.image.toDrive(
-        image=total_exchange,
-        description=task_desc,
-        folder=drive_folder,
-        scale=scale,
-        region=global_region,
-        maxPixels=1e13,
-    )
-
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
-    return task
-
-def plot_alternation_exchange_map(
-    output_dir: str,
-    nodata_val: int,
-    raster_filename: str,
-    scale_factor: float = 0.05,
-) -> None:
-    """
-    Plot the Alternation Exchange raster map with cartographic elements.
-
-    Parameters
-    ----------
-    output_dir : str
-        Directory containing the exported GEE tiles and where the map will be saved.
-    nodata_val : int
-        Value representing NoData in the raster to be masked out.
-    raster_filename : str
-        Prefix of the raster tiles to plot.
-    scale_factor : float, optional
-        Scale factor to downsample the massive global raster to fit into memory.
-
-    Returns
-    -------
-    None
-    """
-    # 1. Locate all raster tiles exported by GEE
-    raster_files = glob.glob(os.path.join(output_dir, f"{raster_filename}*.tif"))
-    if not raster_files:
-        raise FileNotFoundError(
-            f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
-        )
-
-    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
-    vrt_path = os.path.join(output_dir, "merged_exchange.vrt")
-    files_str = " ".join([f'"{f}"' for f in raster_files])
-    os.system(f"gdalbuildvrt {vrt_path} {files_str}")
-
-    # 3. Calculate pixel size for scale bar
-    pixel_size_km = compute_display_pixel_size_km(
-        raster_path=vrt_path,
-        downsample_factor=scale_factor,
-    )
-
-    # 4. Read raster and basic metadata with downsampling
-    with rasterio.open(vrt_path) as src:
-        out_shape = (
-            max(1, int(src.height * scale_factor)),
-            max(1, int(src.width * scale_factor)),
-        )
-        data = src.read(
-            1,
-            out_shape=out_shape,
-            resampling=rasterio.enums.Resampling.nearest,
-        )
-
-        # Force masking using the provided nodata value
-        data_masked = np.ma.masked_equal(data, nodata_val)
-
-        src_crs = src.crs
-        # Adjust the affine transform for the new downsampled resolution
-        transform = src.transform * src.transform.scale(
-            (src.width / data.shape[1]),
-            (src.height / data.shape[0]),
-        )
-        height, width = data.shape
-
-    # 5. Figure
-    fig, ax = plt.subplots(figsize=(20, 10), dpi=300)
-
-    # Determine max value for colormap
-    try:
-        data_max = int(np.ma.max(data_masked))
-    except:
-        data_max = 1
-
-    if data_max <= 0:
-        data_max = 1
-
-    # 6. Discrete Colormap Configuration
-    original_cmap = plt.get_cmap("viridis_r")
-    # Define the color for value 0 (Background/Gray)
-    colors_list = ["#c0c0c0"] + [
-        original_cmap(i) for i in np.linspace(0, 1, data_max)
-    ]
-    cmap = ListedColormap(colors_list)
-    bounds = np.arange(-0.5, data_max + 1.5, 1)
-    norm = BoundaryNorm(bounds, cmap.N)
-
-    # 7. Plot raster
-    ax.imshow(
-        data_masked,
-        cmap=cmap,
-        interpolation="nearest",
-        norm=norm,
-    )
-
-    # 8. Legend Configuration
-    legend_elements = []
-
-    # Extract unique values actually present in the masked raster data
-    present_values = np.unique(data_masked.compressed())
-
-    for i in range(0, data_max + 1):
-        # Append to legend ONLY if the value is present in the map
-        if i in present_values:
-            legend_elements.append(
-                Patch(
-                    facecolor=cmap(norm(i)),
-                    edgecolor="none",
-                    linewidth=0,
-                    label=str(i),
-                ),
-            )
-
-    ax.legend(
-        handles=legend_elements,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        frameon=False,
-        fontsize=12,
-        borderpad=1.2,
-        title="Exchange",
-        title_fontsize=14,
-        alignment="left",
-        handletextpad=0.8,
-        columnspacing=2,
-        labelspacing=0.8,
-        handlelength=2.0,
-        handleheight=1.5,
-    )
-
-    # 9. Cartographic elements
-    degree_in_meters = 111320.0
-    dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
-
-    def km_formatter(value, unit):
-        if unit == "Mm":
-            return f"{int(value * 1000)} km"
-        return f"{int(value)} {unit}"
-
-    scalebar = ScaleBar(
-        dx=dx_meters,
-        units="m",
-        length_fraction=0.15,
-        location="lower left",
-        box_alpha=0.6,
-        scale_formatter=km_formatter,
-    )
-    ax.add_artist(scalebar)
-
-    try:
-        north_arrow(
-            ax,
-            location="upper right",
-            shadow=False,
-            rotation={"degrees": 0},
-            scale=0.5,
-        )
-    except NameError:
-        print("north_arrow function not found. Skipping north arrow.")
-
-    # 10. Axes styling
-    ax.set_title("Alternation Exchange", fontsize=18, pad=10)
-    ax.set_aspect("equal")
-
-    to_latlon = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
-
-    def format_lon(x, pos):
-        x = np.clip(x, 0, width - 1)
-        x_proj, y_proj = rasterio.transform.xy(transform, height // 2, x)
-        lon, _ = to_latlon.transform(x_proj, y_proj)
-        return f"{lon:.1f}°"
-
-    def format_lat(y, pos):
-        y = np.clip(y, 0, height - 1)
-        x_proj, y_proj = rasterio.transform.xy(transform, y, width // 2)
-        _, lat = to_latlon.transform(x_proj, y_proj)
-        return f"{lat:.1f}°"
-
-    ax.xaxis.set_major_formatter(FuncFormatter(format_lon))
-    ax.yaxis.set_major_formatter(FuncFormatter(format_lat))
-
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
-
-    ax.tick_params(axis="both", which="major", labelsize=10, pad=4)
-    plt.setp(ax.get_yticklabels(), rotation=90, va="center")
-
-    # 11. Save and Show
-    maps_dir = os.path.join(output_dir, "maps")
-    os.makedirs(maps_dir, exist_ok=True)
-    output_figure_path = os.path.join(maps_dir, "map_alternation_exchange.png")
-
-    plt.savefig(
-        output_figure_path,
-        dpi=300,
-        bbox_inches="tight",
-        format="png",
-        pad_inches=0.5,
-    )
-    plt.show()
-    print(f"Map figure saved successfully to: {output_figure_path}")
-
-def export_alternation_shift_task_gee(
-    year_list: list,
-    drive_folder: str,
-    scale: int = 300,
-    nodata_val: int = NODATA_VALUE,
-) -> ee.batch.Task:
-    """
-    Compute and export a raster representing the Alternation Shift Component using GEE.
-    Calculated as: Total Changes - Quantity (Extension) - Total Exchange.
-    """
-    print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
-
-    # 1. Fetch all images in the time series
-    imgs = []
-    for y in year_list:
-        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-            ee.Filter.calendarRange(y, y, 'year')
-        ).select(GLANCE_CLASS_BAND).mosaic()
-        img = img.updateMask(img.neq(nodata_val))
-        imgs.append(img)
-
-    # 2. Calculate Total Changes across all intervals
-    total_changes = ee.Image(0).toUint8()
-    for t in range(len(imgs) - 1):
-        change = imgs[t].neq(imgs[t+1])
-        total_changes = total_changes.add(change)
-
-    # 3. Calculate Quantity Component (start != end)
-    quantity = imgs[0].neq(imgs[-1]).toUint8()
-
-    # 4. Calculate Total Exchange
-    classes = list(GLANCE_METADATA.keys())
-    total_exchange = ee.Image(0).toUint8()
-
-    for i in range(len(classes)):
-        for j in range(i + 1, len(classes)):
-            class_a = classes[i]
-            class_b = classes[j]
-
-            count_a_b = ee.Image(0)
-            count_b_a = ee.Image(0)
-
-            for t in range(len(imgs) - 1):
-                img_t = imgs[t]
-                img_t1 = imgs[t+1]
-
-                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
-                count_a_b = count_a_b.add(trans_a_b)
-
-                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
-                count_b_a = count_b_a.add(trans_b_a)
-
-            pair_exchange = count_a_b.min(count_b_a).multiply(2)
-            total_exchange = total_exchange.add(pair_exchange)
-
-    # 5. Calculate Alternation Shift (Changes - Quantity - Exchange)
-    # .max(0) ensures no negative values if discrepancies arise
-    shift = total_changes.subtract(quantity).subtract(total_exchange).max(0).toUint8()
-
-    # 6. Apply NoData and set properties
-    shift = shift.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
-
-    # 7. Define global bounding box for the export
-    global_region = ee.Geometry.Polygon(
-        [[[-180.0, -90.0], [180.0, -90.0], [180.0, 90.0], [-180.0, 90.0], [-180.0, -90.0]]],
-        None, False
-    )
-
-    # 8. Define and start the Earth Engine export task
-    task_desc = f"Alternation_Shift_{year_list[0]}_{year_list[-1]}"
-    task = ee.batch.Export.image.toDrive(
-        image=shift,
-        description=task_desc,
-        folder=drive_folder,
-        scale=scale,
-        region=global_region,
-        maxPixels=1e13,
-    )
-
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
-    return task
-
-def plot_alternation_shift_map(
-    output_dir: str,
-    nodata_val: int,
-    raster_filename: str,
-    scale_factor: float = 0.05,
-) -> None:
-    """
-    Plot the Alternation Shift raster map with cartographic elements.
-
-    Parameters
-    ----------
-    output_dir : str
-        Directory containing the exported GEE tiles and where the map will be saved.
-    nodata_val : int
-        Value representing NoData in the raster to be masked out.
-    raster_filename : str
-        Prefix of the raster tiles to plot.
-    scale_factor : float, optional
-        Scale factor to downsample the massive global raster to fit into memory.
-
-    Returns
-    -------
-    None
-    """
-    # 1. Locate all raster tiles exported by GEE
-    raster_files = glob.glob(os.path.join(output_dir, f"{raster_filename}*.tif"))
-    if not raster_files:
-        raise FileNotFoundError(
-            f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
-        )
-
-    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
-    vrt_path = os.path.join(output_dir, "merged_shift.vrt")
-    files_str = " ".join([f'"{f}"' for f in raster_files])
-    os.system(f"gdalbuildvrt {vrt_path} {files_str}")
-
-    # 3. Calculate pixel size for scale bar
-    pixel_size_km = compute_display_pixel_size_km(
-        raster_path=vrt_path,
-        downsample_factor=scale_factor,
-    )
-
-    # 4. Read raster and basic metadata with downsampling
-    with rasterio.open(vrt_path) as src:
-        out_shape = (
-            max(1, int(src.height * scale_factor)),
-            max(1, int(src.width * scale_factor)),
-        )
-        data = src.read(
-            1,
-            out_shape=out_shape,
-            resampling=rasterio.enums.Resampling.nearest,
-        )
-
-        # Force masking using the provided nodata value
-        data_masked = np.ma.masked_equal(data, nodata_val)
-
-        src_crs = src.crs
-        # Adjust the affine transform for the new downsampled resolution
-        transform = src.transform * src.transform.scale(
-            (src.width / data.shape[1]),
-            (src.height / data.shape[0]),
-        )
-        height, width = data.shape
-
-    # 5. Figure
-    fig, ax = plt.subplots(figsize=(20, 10), dpi=300)
-
-    # Determine max value for colormap
-    try:
-        data_max = int(np.ma.max(data_masked))
-    except:
-        data_max = 1
-
-    if data_max <= 0:
-        data_max = 1
-
-    # 6. Discrete Colormap Configuration
-    original_cmap = plt.get_cmap("viridis_r")
-    # Define the color for value 0 (Background/Gray)
-    colors_list = ["#c0c0c0"] + [
-        original_cmap(i) for i in np.linspace(0, 1, data_max)
-    ]
-    cmap = ListedColormap(colors_list)
-    bounds = np.arange(-0.5, data_max + 1.5, 1)
-    norm = BoundaryNorm(bounds, cmap.N)
-
-    # 7. Plot raster
-    ax.imshow(
-        data_masked,
-        cmap=cmap,
-        interpolation="nearest",
-        norm=norm,
-    )
-
-    # 8. Legend Configuration
-    legend_elements = []
-
-    # Extract unique values actually present in the masked raster data
-    present_values = np.unique(data_masked.compressed())
-
-    for i in range(0, data_max + 1):
-        # Append to legend ONLY if the value is present in the map
-        if i in present_values:
-            legend_elements.append(
-                Patch(
-                    facecolor=cmap(norm(i)),
-                    edgecolor="none",
-                    linewidth=0,
-                    label=str(i),
-                ),
-            )
-
-    ax.legend(
-        handles=legend_elements,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        frameon=False,
-        fontsize=12,
-        borderpad=1.2,
-        title="Shift",
-        title_fontsize=14,
-        alignment="left",
-        handletextpad=0.8,
-        columnspacing=2,
-        labelspacing=0.8,
-        handlelength=2.0,
-        handleheight=1.5,
-    )
-
-    # 9. Cartographic elements
-    degree_in_meters = 111320.0
-    dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
-
-    def km_formatter(value, unit):
-        if unit == "Mm":
-            return f"{int(value * 1000)} km"
-        return f"{int(value)} {unit}"
-
-    scalebar = ScaleBar(
-        dx=dx_meters,
-        units="m",
-        length_fraction=0.15,
-        location="lower left",
-        box_alpha=0.6,
-        scale_formatter=km_formatter,
-    )
-    ax.add_artist(scalebar)
-
-    try:
-        north_arrow(
-            ax,
-            location="upper right",
-            shadow=False,
-            rotation={"degrees": 0},
-            scale=0.5,
-        )
-    except NameError:
-        print("north_arrow function not found. Skipping north arrow.")
-
-    # 10. Axes styling
-    ax.set_title("Alternation Shift", fontsize=18, pad=10)
-    ax.set_aspect("equal")
-
-    to_latlon = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
-
-    def format_lon(x, pos):
-        x = np.clip(x, 0, width - 1)
-        x_proj, y_proj = rasterio.transform.xy(transform, height // 2, x)
-        lon, _ = to_latlon.transform(x_proj, y_proj)
-        return f"{lon:.1f}°"
-
-    def format_lat(y, pos):
-        y = np.clip(y, 0, height - 1)
-        x_proj, y_proj = rasterio.transform.xy(transform, y, width // 2)
-        _, lat = to_latlon.transform(x_proj, y_proj)
-        return f"{lat:.1f}°"
-
-    ax.xaxis.set_major_formatter(FuncFormatter(format_lon))
-    ax.yaxis.set_major_formatter(FuncFormatter(format_lat))
-
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
-
-    ax.tick_params(axis="both", which="major", labelsize=10, pad=4)
-    plt.setp(ax.get_yticklabels(), rotation=90, va="center")
-
-    # 11. Save and Show
-    maps_dir = os.path.join(output_dir, "maps")
-    os.makedirs(maps_dir, exist_ok=True)
-    output_figure_path = os.path.join(maps_dir, "map_alternation_shift.png")
-
-    plt.savefig(
-        output_figure_path,
-        dpi=300,
-        bbox_inches="tight",
-        format="png",
-        pad_inches=0.5,
-    )
-    plt.show()
-    print(f"Map figure saved successfully to: {output_figure_path}")
 
 
 ###############################################################################
@@ -6309,14 +6372,7 @@ def reorder_matrices_by_net_change(
 #                  10. Plot heat maps function                                #
 #                                                                             #
 ###############################################################################
-import os
-from typing import Iterable, List, Optional, Tuple
 
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-import numpy as np
-import pandas as pd
 
 def annotate_heatmap(
     ax: plt.Axes,
