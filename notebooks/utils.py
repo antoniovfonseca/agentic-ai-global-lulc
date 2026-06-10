@@ -78,6 +78,27 @@ def get_year_from_filename(filepath):
         return int(match.group(1))
     return 0
 
+def build_global_valid_mask_and_yearly_images(
+    year_list: list,
+    collection_id: str,
+    band_name: str,
+    nodata_val: int,
+) -> tuple[ee.Image, list[tuple[int, ee.Image]]]:
+    collection = ee.ImageCollection(collection_id).select(band_name)
+
+    global_mask = ee.Image(1)
+    yearly_images = []
+
+    for year in year_list:
+        image_year = collection.filter(
+            ee.Filter.calendarRange(year, year, "year")
+        ).mosaic()
+
+        yearly_images.append((year, image_year))
+        global_mask = global_mask.And(image_year.neq(nodata_val))
+
+    return global_mask, yearly_images
+
 ###############################################################################
 #                                                                             #
 #                  3. GLanCE VISUALIZATION                                    #
@@ -610,147 +631,83 @@ def plot_pixel_counts_bar_chart(
 # ---------------------------------------------------------------------------
 # 5.1 EXPORT NUMBER OF CHANGES PER INTERVAL
 # ---------------------------------------------------------------------------
-def export_global_change_frequency_tasks(
-    year_list: list[int],
+def export_interval_transition_matrices_gee(
+    year_list: list,
     drive_folder: str,
+    collection_id: str,
+    band_name: str,
     scale: int = 300,
-    max_pixels: float = 1e13,
+    nodata_val: int = 255,
 ) -> list:
     """
-    Triggers GEE tasks to count pixels changing in each interval,
-    categorized by their total number of changes across the series.
+    Export LULC transition matrices between consecutive years to Google Drive.
 
     Parameters
     ----------
-    year_list : list[int]
-        List of years for indexing.
+    year_list : list
+        List of years representing the timeline.
     drive_folder : str
-        Directory to save the CSV files in Drive.
+        Google Drive folder name for the exported CSV files.
+    collection_id : str
+        GEE ImageCollection ID containing the LULC rasters.
+    band_name : str
+        Band name representing the LULC classes.
     scale : int, optional
-        Spatial resolution in meters. Defaults to 300.
-    max_pixels : float, optional
-        Maximum pixels for reduceRegion. Defaults to 1e13.
+        Spatial resolution for the export, by default 300.
+    nodata_val : int, optional
+        Value representing NoData/Background to be masked out, by default 255.
 
     Returns
     -------
     list
-        List of triggered Earth Engine Task objects.
+        List of submitted ee.batch.Task objects.
     """
-    # 1. Extract images for all years
-    images = []
-    for year in year_list:
-        img = ee.ImageCollection(
-            GLANCE_COLLECTION_ID,
-        ).filterDate(
-            f"{year}-01-01",
-            f"{year}-12-31",
-        ).mosaic().select(
-            GLANCE_CLASS_BAND,
-        )
-        images.append(
-            img,
-        )
+    tasks = []
 
-    # 2. Compute change images per interval
-    change_images = []
-    n_intervals = len(
-        year_list,
-    ) - 1
-
-    for i in range(
-        n_intervals,
-    ):
-        img_curr = images[
-            i
-        ]
-        img_next = images[
-            i + 1
-        ]
-
-        # 3. Binary change mapping (1 if changed, 0 otherwise)
-        change = img_curr.neq(
-            img_next,
-        ).rename(
-            "change",
-        )
-        change_images.append(
-            change,
-        )
-
-    # 4. Compute total changes over the entire time series
-    # Summing all boolean change images
-    total_changes = ee.ImageCollection(
-        change_images,
-    ).sum().rename(
-        "total_changes",
+    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+        year_list=year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
     )
 
-    tasks_list = []
+    yearly_by_year = {
+        year: image_year
+        for year, image_year in yearly_images
+    }
 
-    # 5. Generate an export task for each interval
-    for i in range(
-        n_intervals,
-    ):
-        y_start = year_list[
-            i
-        ]
-        y_end = year_list[
-            i + 1
-        ]
-        interval_label = f"{y_start}_{y_end}"
+    for i in range(len(year_list) - 1):
+        start_year = year_list[i]
+        end_year = year_list[i + 1]
 
-        # 6. Mask total_changes to only pixels that changed in THIS interval
-        interval_change_mask = change_images[
-            i
-        ]
-        masked_total = total_changes.updateMask(
-            interval_change_mask,
-        )
+        img_start = yearly_by_year[start_year].updateMask(global_mask)
+        img_end = yearly_by_year[end_year].updateMask(global_mask)
 
-        # 7. Reduce region to get the frequency histogram
-        histogram = masked_total.reduceRegion(
+        transition_img = img_start.multiply(100).add(img_end).rename("transition")
+
+        histogram = transition_img.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=GLOBAL_GEOM,
             scale=scale,
-            maxPixels=max_pixels,
+            maxPixels=1e13,
             tileScale=16,
         )
 
-        # 8. Extract the dictionary and convert it to a FeatureCollection
-        counts_dict = ee.Dictionary(
-            histogram.get(
-                "total_changes",
-            ),
-        )
-        feature = ee.Feature(
-            None,
-            counts_dict,
-        )
-        feature_collection = ee.FeatureCollection(
-            [
-                feature,
-            ]
-        )
+        feature = ee.Feature(None, histogram)
+        fc = ee.FeatureCollection([feature])
 
-        # 9. Define the export task parameters
-        export_name = f"Number_Change_{interval_label}"
+        task_name = f"transition_{start_year}_{end_year}"
         task = ee.batch.Export.table.toDrive(
-            collection=feature_collection,
-            description=export_name,
+            collection=fc,
+            description=task_name,
             folder=drive_folder,
+            fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
             fileFormat="CSV",
         )
-
-        # 10. Start the task and append it to the list
         task.start()
-        print(
-            f"Task started: {export_name} (Scale: {scale}m)",
-        )
-        tasks_list.append(
-            task,
-        )
+        tasks.append(task)
 
-    return tasks_list
+    return tasks
 
 # ---------------------------------------------------------------------------
 # 5.1 PLOT NUMBER OF CHANGES DURING TIME INTERVALS
@@ -5546,30 +5503,23 @@ def build_glance_stack(
     tuple
         A tuple containing the ee.Image stack and the list of band names.
     """
-    # 1. Initialize lists for image bands and names
+    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+        year_list=year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
+
     images = []
     b_names = []
-    raw_images = []
-    global_mask = ee.Image(1)
 
-    # 2. Loop through the requested years
-    for year in year_list:
+    for year, img in yearly_images:
         b_name = f"y{year}"
         b_names.append(b_name)
-
-        img = ee.ImageCollection(collection_id).filter(
-            ee.Filter.calendarRange(year, year, 'year')
-        ).select(band_name).mosaic()
-
-        raw_images.append(img)
-        global_mask = global_mask.And(img.neq(nodata_val))
-
-    for img, b_name in zip(raw_images, b_names):
         images.append(
             img.updateMask(global_mask).rename(b_name)
         )
 
-    # 5. Combine into a single multi-band image
     stack = ee.Image(images)
 
     return stack, b_names
@@ -5613,50 +5563,50 @@ def export_interval_transition_matrices_gee(
         List of submitted ee.batch.Task objects.
     """
     tasks = []
-    collection = ee.ImageCollection(collection_id)
-    
+
+    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+        year_list=year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
+
+    yearly_by_year = {
+        year: image_year
+        for year, image_year in yearly_images
+    }
+
     for i in range(len(year_list) - 1):
         start_year = year_list[i]
         end_year = year_list[i + 1]
-        
-        # 1. Filter and extract the LULC images for the specific years
-        img_start = collection.filter(ee.Filter.calendarRange(start_year, start_year, 'year')).first().select(band_name)
-        img_end = collection.filter(ee.Filter.calendarRange(end_year, end_year, 'year')).first().select(band_name)
-        
-        # 2. Mask NoData values
-        img_start = img_start.updateMask(img_start.neq(nodata_val))
-        img_end = img_end.updateMask(img_end.neq(nodata_val))
-        
-        # 3. Create a transition image (StartClass * 100 + EndClass)
-        transition_img = img_start.multiply(100).add(img_end).rename('transition')
-        
-        # 4. Compute the frequency histogram over the globe
-        # Using a global geometry to get the transition matrix
+
+        img_start = yearly_by_year[start_year].updateMask(global_mask)
+        img_end = yearly_by_year[end_year].updateMask(global_mask)
+
+        transition_img = img_start.multiply(100).add(img_end).rename("transition")
+
         histogram = transition_img.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
-            geometry=ee.Geometry.Polygon([-180, -90, 180, 90], None, False),
+            geometry=GLOBAL_GEOM,
             scale=scale,
             maxPixels=1e13,
-            tileScale=16
+            tileScale=16,
         )
-        
-        # 5. Create a FeatureCollection with a single feature to hold the dictionary
+
         feature = ee.Feature(None, histogram)
         fc = ee.FeatureCollection([feature])
-        
-        # 6. Configure and start the export task
+
         task_name = f"transition_{start_year}_{end_year}"
         task = ee.batch.Export.table.toDrive(
             collection=fc,
             description=task_name,
             folder=drive_folder,
             fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
-            fileFormat="CSV"
+            fileFormat="CSV",
         )
         task.start()
         tasks.append(task)
-        print(f"Task started for transition {start_year}-{end_year} (Scale: {scale}m)")
-        
+
     return tasks
 
 def parse_gee_raw_csv(file_path: str) -> pd.DataFrame:
