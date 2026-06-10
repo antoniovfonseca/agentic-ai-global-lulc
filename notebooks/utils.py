@@ -631,51 +631,57 @@ def plot_pixel_counts_bar_chart(
 # ---------------------------------------------------------------------------
 # 5.1 EXPORT NUMBER OF CHANGES PER INTERVAL
 # ---------------------------------------------------------------------------
-def export_interval_transition_matrices_gee(
+def export_global_change_frequency_tasks(
     year_list: list,
     drive_folder: str,
-    collection_id: str,
-    band_name: str,
     scale: int = 300,
-    nodata_val: int = 255,
 ) -> list:
     """
-    Export LULC transition matrices between consecutive years to Google Drive.
+    Triggers GEE tasks to calculate the frequency of pixel changes for each
+    consecutive interval in a time series and exports them as CSV files.
+
+    This function calculates how many times pixels change their class over the 
+    ENTIRE time series, and breaks this down by temporal interval. For each 
+    interval, it counts the pixels that changed and groups them by their total 
+    number of changes across all years, mimicking local Numba logic.
+    A global mask ensures that only valid pixels are evaluated.
 
     Parameters
     ----------
     year_list : list
-        List of years representing the timeline.
+        A list of 4-digit years to process (e.g., [2001, 2002, 2003]).
     drive_folder : str
         Google Drive folder name for the exported CSV files.
-    collection_id : str
-        GEE ImageCollection ID containing the LULC rasters.
-    band_name : str
-        Band name representing the LULC classes.
     scale : int, optional
-        Spatial resolution for the export, by default 300.
-    nodata_val : int, optional
-        Value representing NoData/Background to be masked out, by default 255.
+        The scale in meters for the GEE reduction. Default is 300.
 
     Returns
     -------
     list
-        List of submitted ee.batch.Task objects.
+        A list containing all the triggered ee.batch.Task objects.
     """
-    tasks = []
-
+    # 1. Build a global mask and get yearly images for a consistent study area
     global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
         year_list=year_list,
-        collection_id=collection_id,
-        band_name=band_name,
-        nodata_val=nodata_val,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
     )
 
-    yearly_by_year = {
-        year: image_year
-        for year, image_year in yearly_images
-    }
+    yearly_by_year = {year: image for year, image in yearly_images}
+    tasks_list = []
 
+    # 2. Calculate the total number of changes over the ENTIRE time series
+    total_changes = ee.Image(0).toInt32().rename('num_changes')
+    for i in range(len(year_list) - 1):
+        start_year = year_list[i]
+        end_year = year_list[i + 1]
+        img_start = yearly_by_year[start_year].updateMask(global_mask)
+        img_end = yearly_by_year[end_year].updateMask(global_mask)
+        interval_change = img_start.neq(img_end)
+        total_changes = total_changes.add(interval_change)
+
+    # 3. Iterate through each consecutive interval again to mask and export
     for i in range(len(year_list) - 1):
         start_year = year_list[i]
         end_year = year_list[i + 1]
@@ -683,31 +689,38 @@ def export_interval_transition_matrices_gee(
         img_start = yearly_by_year[start_year].updateMask(global_mask)
         img_end = yearly_by_year[end_year].updateMask(global_mask)
 
-        transition_img = img_start.multiply(100).add(img_end).rename("transition")
+        # Mask total_changes to only include pixels that changed in THIS interval
+        interval_change = img_start.neq(img_end)
+        interval_total_changes = total_changes.updateMask(interval_change)
 
-        histogram = transition_img.reduceRegion(
+        # 4. Compute the frequency histogram of the total changes for these pixels
+        histogram = interval_total_changes.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=GLOBAL_GEOM,
             scale=scale,
             maxPixels=1e13,
             tileScale=16,
-        )
+        ).get('num_changes')
 
-        feature = ee.Feature(None, histogram)
+        # Handle possible nulls if no change occurred
+        hist_dict = ee.Dictionary(ee.Algorithms.If(histogram, histogram, {}))
+        feature = ee.Feature(None, hist_dict)
         fc = ee.FeatureCollection([feature])
 
-        task_name = f"transition_{start_year}_{end_year}"
+        # 5. Configure and start the export task
+        export_name = f"Number_Change_{start_year}_{end_year}"
         task = ee.batch.Export.table.toDrive(
             collection=fc,
-            description=task_name,
+            description=export_name,
             folder=drive_folder,
-            fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
+            fileNamePrefix=export_name,
             fileFormat="CSV",
         )
         task.start()
-        tasks.append(task)
+        tasks_list.append(task)
+        print(f"Task submitted for interval {start_year}-{end_year}")
 
-    return tasks
+    return tasks_list
 
 # ---------------------------------------------------------------------------
 # 5.1 PLOT NUMBER OF CHANGES DURING TIME INTERVALS
