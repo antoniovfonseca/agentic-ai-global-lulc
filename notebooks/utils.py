@@ -5388,7 +5388,7 @@ def plot_alternation_shift_map(
 
 
 
-def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, Any]:
+def load_and_reorder_matrices(output_path: str, year_list: list) -> Dict[str, Any]:
     """
     Load transition matrices from CSVs and reorder them based on sum net change.
 
@@ -5396,8 +5396,8 @@ def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, 
     ----------
     output_path : str
         Base directory path where the matrix CSV files are stored.
-    interval_str : str
-        Formatted interval string (e.g., '2001-2019').
+    year_list : list
+        List of years representing the timeline (e.g., [2001, 2010, 2019]).
 
     Returns
     -------
@@ -5405,6 +5405,8 @@ def load_and_reorder_matrices(output_path: str, interval_str: str) -> Dict[str, 
         Dictionary containing the loaded and reordered matrices.
     """
     matrices = {}
+
+    interval_str = f"{year_list[0]}-{year_list[-1]}"
 
     for key, meta in MATRIX_META.items():
         # Look directly in the output_path instead of the 'tables' subfolder
