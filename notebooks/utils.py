@@ -2806,6 +2806,9 @@ def export_global_transition_tasks(
     list of ee.batch.Task
         A list of triggered Earth Engine Task objects for monitoring.
     """
+    # Initialize the GEE ImageCollection
+    collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
+
     # 1. Define transition pairs (consecutive intervals)
     pairs = [
         (year_list[i], year_list[i+1]) 
