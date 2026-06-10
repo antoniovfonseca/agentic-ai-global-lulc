@@ -2450,10 +2450,10 @@ def plot_trajectory_distribution(
     ax.set_xticks([])
     
     # Handle limits dynamically based on percentage
-    ax.set_ylim(0, max(bottom * 1.2, 1.0))
+    max_y = bottom * 1.05 if bottom > 0 else 1.0
+    ax.set_ylim(0, max_y)
 
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=10))
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=10))
 
     legend_elements = [
         Patch(facecolor=colors[2], label="2"),
@@ -6462,6 +6462,3 @@ def _unit_formatter(
         return fmt.format(x / factor)
 
     return mticker.FuncFormatter(_fmt)
-
-
-
