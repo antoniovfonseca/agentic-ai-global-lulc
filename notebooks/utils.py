@@ -270,23 +270,26 @@ def export_global_pixel_counts_tasks(
     list of ee.batch.Task
         A list containing all the triggered Earth Engine tasks.
     """
-    # 1. Access the GLANCE collection using global constants defined in utils.py
     glance_collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
 
-    # 2. Initialize an empty list to store the tasks
     tasks_list = []
 
-    # 3. Iterate over the provided list of years
+    # 1. Build a global mask: keep only pixels valid in every year in year_list
+    global_mask = ee.Image(1)
+    yearly_images = []
+
     for year in year_list:
-        # 4. Filter the collection for the specific year
         image_year = glance_collection.filter(
-            ee.Filter.calendarRange(year, year, 'year')
+            ee.Filter.calendarRange(year, year, "year")
         ).mosaic()
 
-        image_year = image_year.updateMask(image_year.neq(nodata_val))
+        yearly_images.append((year, image_year))
+        global_mask = global_mask.And(image_year.neq(nodata_val))
 
-        # 5. Calculate the frequency histogram
-        # Note: tileScale=16 is used to avoid memory limit errors in global reductions
+    # 2. Apply the global mask to each year before counting pixels
+    for year, image_year in yearly_images:
+        image_year = image_year.updateMask(global_mask)
+
         histogram = image_year.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=GLOBAL_GEOM,
@@ -295,27 +298,22 @@ def export_global_pixel_counts_tasks(
             tileScale=16
         )
 
-        # 6. Extract the dictionary and convert it to a FeatureCollection
         counts_dict = ee.Dictionary(histogram.get(GLANCE_CLASS_BAND))
         feature_collection = ee.FeatureCollection([
             ee.Feature(None, counts_dict)
         ])
 
-        # 7. Define the export task parameters
         export_name = f"Pixel_Counts_LULC_{year}"
         task = ee.batch.Export.table.toDrive(
             collection=feature_collection,
             description=export_name,
             folder=drive_folder,
-            fileFormat='CSV'
+            fileFormat="CSV"
         )
 
-        # 8. Start the task and append it to the list
         task.start()
-        print(f"Task started: {export_name} (Scale: {scale}m)")
         tasks_list.append(task)
 
-    # 9. Return the list of triggered tasks
     return tasks_list
 
 # ---------------------------------------------------------------------------
@@ -5551,21 +5549,25 @@ def build_glance_stack(
     # 1. Initialize lists for image bands and names
     images = []
     b_names = []
+    raw_images = []
+    global_mask = ee.Image(1)
 
     # 2. Loop through the requested years
     for year in year_list:
         b_name = f"y{year}"
         b_names.append(b_name)
 
-        # 3. Retrieve the image for the specific year
         img = ee.ImageCollection(collection_id).filter(
             ee.Filter.calendarRange(year, year, 'year')
         ).select(band_name).mosaic()
 
-        # 4. Mask out the NoData value
-        img = img.updateMask(img.neq(nodata_val)).rename(b_name)
+        raw_images.append(img)
+        global_mask = global_mask.And(img.neq(nodata_val))
 
-        images.append(img)
+    for img, b_name in zip(raw_images, b_names):
+        images.append(
+            img.updateMask(global_mask).rename(b_name)
+        )
 
     # 5. Combine into a single multi-band image
     stack = ee.Image(images)
