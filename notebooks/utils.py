@@ -2521,7 +2521,7 @@ def plot_trajectory_distribution(
 # ---------------------------------------------------------------------------
 def plot_trajectory_map(
     output_dir: str,
-    vrt_filename: str = "merged_trajectory.vrt",
+    raster_filename: str = "Trajectory_Analysis",
     scale_factor: float = 0.05,
     nodata_val: int = 255,
 ) -> None:
@@ -2533,31 +2533,40 @@ def plot_trajectory_map(
     ----------
     output_dir : str
         Directory containing the exported GEE tiles and where the map will be saved.
-    vrt_filename : str, optional
-        Name of the VRT file to plot.
+    raster_filename : str, optional
+        Prefix of the raster tiles to plot.
     scale_factor : float, optional
         Scale factor to downsample the massive global raster to fit into memory.
     nodata_val : int, optional
         Value representing NoData in the raster to be masked out.
     """
 
-    # 1. Locate VRT
-    raster_path = os.path.join(
-        output_dir,
-        vrt_filename
+    # 1. Locate all raster tiles exported by GEE
+    raster_files = glob.glob(
+        os.path.join(
+            output_dir,
+            f"{raster_filename}*.tif"
+        )
     )
-    if not os.path.exists(raster_path):
-        raise FileNotFoundError(f"Raster (VRT) not found: {raster_path}")
+    if not raster_files:
+        raise FileNotFoundError(
+            f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
+        )
 
-    # 2. Calculate pixel size for scale bar
+    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
+    vrt_path = os.path.join(output_dir, "merged_trajectory.vrt")
+    files_str = " ".join([f'"{f}"' for f in raster_files])
+    os.system(f"gdalbuildvrt {vrt_path} {files_str}")
+
+    # 3. Calculate pixel size for scale bar
     # Make sure compute_display_pixel_size_km is available in utils.py
     pixel_size_km = compute_display_pixel_size_km(
-        raster_path=raster_path,
+        raster_path=vrt_path,
         downsample_factor=scale_factor
     )
 
-    # 3. Read raster and basic metadata with downsampling
-    with rasterio.open(raster_path) as src:
+    # 4. Read raster and basic metadata with downsampling
+    with rasterio.open(vrt_path) as src:
         out_shape = (
             max(1, int(src.height * scale_factor)),
             max(1, int(src.width * scale_factor)),
@@ -2582,13 +2591,13 @@ def plot_trajectory_map(
         )
         height, width = data.shape
 
-    # 4. Figure
+    # 5. Figure
     fig, ax = plt.subplots(
         figsize=(20, 10),
         dpi=300
     )
 
-    # 5. Colormap
+    # 6. Colormap
     cmap = ListedColormap(
         [
             "#d9d9d9",  # Trajectory 1
@@ -2601,7 +2610,7 @@ def plot_trajectory_map(
     bounds = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
     norm = BoundaryNorm(bounds, cmap.N)
 
-    # 6. Plot raster
+    # 7. Plot raster
     ax.imshow(
         data,
         cmap=cmap,
@@ -2609,7 +2618,7 @@ def plot_trajectory_map(
         norm=norm
     )
 
-    # 7. Legend
+    # 8. Legend
     legend_elements = [
         Patch(
             facecolor="#d9d9d9",
@@ -2668,7 +2677,7 @@ def plot_trajectory_map(
         handleheight=1.5,
     )
 
-    # 8. Cartographic elements
+    # 9. Cartographic elements
     scalebar = ScaleBar(
         dx=pixel_size_km,
         units="km",
@@ -2691,7 +2700,7 @@ def plot_trajectory_map(
     except NameError:
         print("north_arrow function not found. Skipping north arrow.")
 
-    # 9. Axes styling
+    # 10. Axes styling
     ax.set_title(
         "Trajectories",
         fontsize=18, 
@@ -2735,7 +2744,7 @@ def plot_trajectory_map(
         va="center"
     )
 
-    # 10. Save and Show
+    # 11. Save and Show
     maps_dir = os.path.join(
         output_dir,
         "maps"
