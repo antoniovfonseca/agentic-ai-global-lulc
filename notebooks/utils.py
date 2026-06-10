@@ -245,7 +245,9 @@ def export_global_pixel_counts_tasks(
     year_list: list,
     drive_folder: str,
     scale: int = 30,
-    max_pixels: float = 1e13
+    max_pixels: float = 1e13,
+    nodata_val: int = NODATA_VALUE
+
 ) -> list:
     """
     Triggers Earth Engine tasks to calculate the frequency histogram (pixel counts)
@@ -280,6 +282,8 @@ def export_global_pixel_counts_tasks(
         image_year = glance_collection.filter(
             ee.Filter.calendarRange(year, year, 'year')
         ).mosaic()
+
+        image_year = image_year.updateMask(image_year.neq(nodata_val))
 
         # 5. Calculate the frequency histogram
         # Note: tileScale=16 is used to avoid memory limit errors in global reductions
