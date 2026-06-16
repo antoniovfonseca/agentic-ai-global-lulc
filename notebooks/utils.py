@@ -268,7 +268,7 @@ def export_global_pixel_counts_tasks(
     scale: int = 30,
     max_pixels: float = 1e13,
     nodata_val: int = NODATA_VALUE,
-    grid_degrees: int = 10,
+    grid_degrees: int = 5,
 
 ) -> list:
     """
@@ -291,7 +291,7 @@ def export_global_pixel_counts_tasks(
     nodata_val : int, optional
         The NoData value used for masking. Default is 255.
     grid_degrees : int, optional
-        The size of the grid cells in degrees for tiling the globe. Default is 10.
+        The size of the grid cells in degrees for tiling the globe. Default is 5.
 
     Returns
     -------
@@ -328,12 +328,14 @@ def export_global_pixel_counts_tasks(
                 geometry=feature.geometry(),
                 scale=scale,
                 maxPixels=max_pixels,
-                tileScale=4  # Can be smaller as tiles are smaller
+                tileScale=16  # Increased to 16 for maximum memory allocation
             )
             # The result is a dictionary of counts for the tile
-            counts_dict = ee.Dictionary(hist.get(GLANCE_CLASS_BAND))
+            counts = hist.get(GLANCE_CLASS_BAND)
+            # Guard against nulls (e.g., when a tile is completely masked out/empty)
+            safe_dict = ee.Dictionary(ee.Algorithms.If(counts, counts, {}))
             # Set the dictionary as properties of the feature
-            return feature.set(counts_dict)
+            return feature.set(safe_dict)
 
         # 5. Map the function over the grid. This is a server-side operation.
         hist_fc = grid.map(get_hist_for_tile)
@@ -349,7 +351,7 @@ def export_global_pixel_counts_tasks(
 
         task.start()
         tasks_list.append(task)
-        print(f"Task submitted for year {year} (tiled).")
+        print(f"Task submitted for year {year}.")
 
     return tasks_list
 
