@@ -267,24 +267,31 @@ def export_global_pixel_counts_tasks(
     drive_folder: str,
     scale: int = 30,
     max_pixels: float = 1e13,
-    nodata_val: int = NODATA_VALUE
+    nodata_val: int = NODATA_VALUE,
+    grid_degrees: int = 10,
 
 ) -> list:
     """
-    Triggers Earth Engine tasks to calculate the frequency histogram (pixel counts)
-    of the global GLANCE categorical images for a list of years and exports them 
-    to Google Drive as CSV files.
+    Triggers GEE tasks to calculate pixel counts for global GLANCE images.
+
+    This function avoids client-side timeouts by tiling the global geometry and
+    mapping a reduction over the tiles on the server side. The results for each
+    tile are exported to a single CSV per year, which can be aggregated later.
 
     Parameters
     ----------
     year_list : list of int
-        A list of 4-digit years to process (e.g., [2001, 2002, 2003]).
+        A list of 4-digit years to process.
     drive_folder : str
-        The name of the Google Drive folder where the CSVs will be saved.
+        The Google Drive folder where the CSVs will be saved.
     scale : int, optional
         The scale in meters for the GEE reduction. Default is 30.
     max_pixels : float, optional
-        The maximum number of pixels to process in GEE. Default is 1e13.
+        The maximum number of pixels to process. Default is 1e13.
+    nodata_val : int, optional
+        The NoData value used for masking. Default is 255.
+    grid_degrees : int, optional
+        The size of the grid cells in degrees for tiling the globe. Default is 10.
 
     Returns
     -------
@@ -292,41 +299,49 @@ def export_global_pixel_counts_tasks(
         A list containing all the triggered Earth Engine tasks.
     """
     glance_collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
-
     tasks_list = []
 
-    # 1. Build a global mask: keep only pixels valid in every year in year_list
-    global_mask = ee.Image(1)
-    yearly_images = []
+    # 1. Build a global mask for pixels valid in all years
+    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
 
-    for year in year_list:
-        image_year = glance_collection.filter(
-            ee.Filter.calendarRange(year, year, "year")
-        ).mosaic()
+    # 2. Create a grid of geometries to tile the globe
+    polygons = []
+    for lon in range(-180, 180, grid_degrees):
+        for lat in range(-90, 90, grid_degrees):
+            polygons.append(ee.Geometry.Rectangle(lon, lat, lon + grid_degrees, lat + grid_degrees))
+    grid = ee.FeatureCollection(polygons)
 
-        yearly_images.append((year, image_year))
-        global_mask = global_mask.And(image_year.neq(nodata_val))
-
-    # 2. Apply the global mask to each year before counting pixels
+    # 3. Process each year
     for year, image_year in yearly_images:
-        image_year = image_year.updateMask(global_mask)
+        image_masked = image_year.updateMask(global_mask)
 
-        histogram = image_year.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
-            geometry=GLOBAL_GEOM,
-            scale=scale,
-            maxPixels=max_pixels,
-            tileScale=16
-        )
+        # 4. Define a server-side function to compute the histogram for a tile
+        def get_hist_for_tile(feature):
+            # reduceRegion is now applied to a smaller tile geometry
+            hist = image_masked.reduceRegion(
+                reducer=ee.Reducer.frequencyHistogram(),
+                geometry=feature.geometry(),
+                scale=scale,
+                maxPixels=max_pixels,
+                tileScale=4  # Can be smaller as tiles are smaller
+            )
+            # The result is a dictionary of counts for the tile
+            counts_dict = ee.Dictionary(hist.get(GLANCE_CLASS_BAND))
+            # Set the dictionary as properties of the feature
+            return feature.set(counts_dict)
 
-        counts_dict = ee.Dictionary(histogram.get(GLANCE_CLASS_BAND))
-        feature_collection = ee.FeatureCollection([
-            ee.Feature(None, counts_dict)
-        ])
+        # 5. Map the function over the grid. This is a server-side operation.
+        hist_fc = grid.map(get_hist_for_tile)
 
+        # 6. Configure and start the export task for the tiled histograms
         export_name = f"Pixel_Counts_LULC_{year}"
         task = ee.batch.Export.table.toDrive(
-            collection=feature_collection,
+            collection=hist_fc,
             description=export_name,
             folder=drive_folder,
             fileFormat="CSV"
@@ -334,6 +349,7 @@ def export_global_pixel_counts_tasks(
 
         task.start()
         tasks_list.append(task)
+        print(f"Task submitted for year {year} (tiled).")
 
     return tasks_list
 
