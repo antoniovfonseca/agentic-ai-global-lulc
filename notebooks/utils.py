@@ -403,7 +403,12 @@ def plot_pixel_counts_bar_chart(
                 pass
         
         if row_dict:
-            yearly_data[year] = row_dict
+            # Accumulate counts if a year is split across multiple files (quadrants)
+            if year not in yearly_data:
+                yearly_data[year] = row_dict
+            else:
+                for class_name, count in row_dict.items():
+                    yearly_data[year][class_name] = yearly_data[year].get(class_name, 0) + count
 
     if not yearly_data:
         print(f"No valid GEE CSV data found in {input_dir}")
