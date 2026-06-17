@@ -268,7 +268,7 @@ def export_global_pixel_counts_tasks(
     scale: int = 30,
     max_pixels: float = 1e13,
     nodata_val: int = NODATA_VALUE,
-    grid_degrees: int = 5,
+    grid_degrees: int = 10,
 
 ) -> list:
     """
@@ -313,37 +313,34 @@ def export_global_pixel_counts_tasks(
     polygons = []
     for lon in range(-180, 180, grid_degrees):
         for lat in range(-90, 90, grid_degrees):
-            polygons.append(ee.Geometry.Rectangle(lon, lat, lon + grid_degrees, lat + grid_degrees))
+            polygons.append(ee.Feature(ee.Geometry.Rectangle(lon, lat, lon + grid_degrees, lat + grid_degrees)))
     grid = ee.FeatureCollection(polygons)
 
     # 3. Process each year
     for year, image_year in yearly_images:
         image_masked = image_year.updateMask(global_mask)
 
-        # 4. Define a server-side function to compute the histogram for a tile
-        def get_hist_for_tile(feature):
-            # reduceRegion is now applied to a smaller tile geometry
-            hist = image_masked.reduceRegion(
-                reducer=ee.Reducer.frequencyHistogram(),
-                geometry=feature.geometry(),
-                scale=scale,
-                maxPixels=max_pixels,
-                tileScale=16  # Increased to 16 for maximum memory allocation
-            )
-            # The result is a dictionary of counts for the tile
-            counts = hist.get(GLANCE_CLASS_BAND)
-            # Guard against nulls (e.g., when a tile is completely masked out/empty)
-            safe_dict = ee.Dictionary(ee.Algorithms.If(counts, counts, {}))
-            # Set the dictionary as properties of the feature
-            return feature.set(safe_dict)
+        # 4. Use reduceRegions for fully distributed parallel execution
+        hist_fc = image_masked.reduceRegions(
+            collection=grid,
+            reducer=ee.Reducer.frequencyHistogram(),
+            scale=scale,
+            tileScale=16
+        )
 
-        # 5. Map the function over the grid. This is a server-side operation.
-        hist_fc = grid.map(get_hist_for_tile)
+        # 5. Flatten the dictionary so the CSV columns are class IDs
+        def process_feature(feature):
+            counts = feature.get(GLANCE_CLASS_BAND)
+            safe_dict = ee.Dictionary(ee.Algorithms.If(counts, counts, {}))
+            # Remove the original dict to keep the output table clean
+            return feature.set(safe_dict).set(GLANCE_CLASS_BAND, None)
+
+        final_fc = hist_fc.map(process_feature)
 
         # 6. Configure and start the export task for the tiled histograms
         export_name = f"Pixel_Counts_LULC_{year}"
         task = ee.batch.Export.table.toDrive(
-            collection=hist_fc,
+            collection=final_fc,
             description=export_name,
             folder=drive_folder,
             fileFormat="CSV"
