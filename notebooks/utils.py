@@ -1108,19 +1108,20 @@ def plot_number_of_changes_distribution(
         )
         return
 
-    # Read the first pixel count file to get total valid pixels
-    df_pixels = pd.read_csv(
-        pixel_count_files[0],
-    )
-    num_cols_pixels = [
-        c for c in df_pixels.select_dtypes(
-            include=['number'],
-        ).columns
-        if 'system' not in c
-    ]
-    total_study_area_pixels = df_pixels[
-        num_cols_pixels
-    ].sum().sum()
+    # Calculate total study area by summing all quadrant files for a specific year
+    first_file = pixel_count_files[0]
+    match = re.search(r"(\d{4})", os.path.basename(first_file))
+    target_year = match.group(1) if match else None
+    
+    year_files = [f for f in pixel_count_files if target_year and target_year in os.path.basename(f)]
+    if not year_files:
+        year_files = [first_file]
+
+    total_study_area_pixels = 0.0
+    for f in year_files:
+        df_pixels = pd.read_csv(f)
+        num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c]
+        total_study_area_pixels += df_pixels[num_cols_pixels].sum().sum()
 
     # 2. Read and compile the Number_Change CSVs
     change_files = glob.glob(
@@ -6006,21 +6007,24 @@ def load_global_transition_matrices(
         filename = os.path.basename(filepath)
         label = filename.replace(".csv", "").replace("transition_", "")
         
-        # 5. Parse the histogram string from the 'LC' column
-        # GEE exports the dictionary as a string in the first row
-        if 'LC' not in df_raw.columns:
-            continue
-            
-        # Clean the string and parse the {key=value} format
-        hist_str = df_raw['LC'].iloc[0]
-        # Remove braces and split by comma-space
-        clean_str = hist_str.strip('{}')
-        pairs = clean_str.split(', ')
         hist_data = {}
-        for pair in pairs:
-            if '=' in pair:
-                k, v = pair.split('=')
-                hist_data[k] = float(v) # Fixes the parsing for GEE CSV format
+        numeric_cols = [c for c in df_raw.columns if str(c).isdigit()]
+        
+        # 5. Parse the histogram
+        if numeric_cols:
+            for col in numeric_cols:
+                hist_data[col] = df_raw[col].sum()
+        else:
+            target_col = 'LC' if 'LC' in df_raw.columns else 'transition'
+            if target_col not in df_raw.columns:
+                continue
+            hist_str = str(df_raw[target_col].iloc[0])
+            clean_str = hist_str.strip('{}')
+            pairs = clean_str.split(', ')
+            for pair in pairs:
+                if '=' in pair:
+                    k, v = pair.split('=')
+                    hist_data[k] = float(v)
 
         records = []
         
