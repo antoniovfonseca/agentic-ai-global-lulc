@@ -5592,6 +5592,7 @@ def export_interval_transition_matrices_gee(
     band_name: str,
     scale: int = 300,
     nodata_val: int = 255,
+    grid_degrees: int = 10,
 ) -> list:
     """
     Export LULC transition matrices between consecutive years to Google Drive.
@@ -5630,6 +5631,13 @@ def export_interval_transition_matrices_gee(
         for year, image_year in yearly_images
     }
 
+    # 1. Create a grid of geometries to tile the globe
+    polygons = []
+    for lon in range(-180, 180, grid_degrees):
+        for lat in range(-90, 90, grid_degrees):
+            polygons.append(ee.Feature(ee.Geometry.Rectangle(lon, lat, lon + grid_degrees, lat + grid_degrees)))
+    grid = ee.FeatureCollection(polygons)
+
     for i in range(len(year_list) - 1):
         start_year = year_list[i]
         end_year = year_list[i + 1]
@@ -5639,20 +5647,25 @@ def export_interval_transition_matrices_gee(
 
         transition_img = img_start.multiply(100).add(img_end).rename("transition")
 
-        histogram = transition_img.reduceRegion(
+        # 2. Use reduceRegions for fully distributed parallel execution
+        hist_fc = transition_img.reduceRegions(
+            collection=grid,
             reducer=ee.Reducer.frequencyHistogram(),
-            geometry=GLOBAL_GEOM,
             scale=scale,
-            maxPixels=1e13,
             tileScale=16,
         )
 
-        feature = ee.Feature(None, histogram)
-        fc = ee.FeatureCollection([feature])
+        # 3. Flatten the dictionary so the CSV columns are class IDs
+        def process_feature(feature):
+            counts = feature.get('transition')
+            safe_dict = ee.Dictionary(ee.Algorithms.If(counts, counts, {}))
+            return feature.set(safe_dict).set('transition', None)
+
+        final_fc = hist_fc.map(process_feature)
 
         task_name = f"transition_{start_year}_{end_year}"
         task = ee.batch.Export.table.toDrive(
-            collection=fc,
+            collection=final_fc,
             description=task_name,
             folder=drive_folder,
             fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
