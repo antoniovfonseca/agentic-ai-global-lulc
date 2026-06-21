@@ -268,15 +268,13 @@ def export_global_pixel_counts_tasks(
     scale: int = 30,
     max_pixels: float = 1e13,
     nodata_val: int = NODATA_VALUE,
-    grid_degrees: int = 10,
-
 ) -> list:
     """
     Triggers GEE tasks to calculate pixel counts for global GLANCE images.
 
-    This function avoids the 12-hour GEE timeout by splitting the globe into
-    four quadrants and exporting a separate task for each. It also uses a
-    tiled `reduceRegions` approach within each quadrant for efficiency.
+    This function calculates the frequency histogram of LULC classes globally
+    using a single reduceRegion call per year and exports the result directly
+    as a single CSV file per year.
 
     Parameters
     ----------
@@ -290,8 +288,6 @@ def export_global_pixel_counts_tasks(
         The maximum number of pixels to process. Default is 1e13.
     nodata_val : int, optional
         The NoData value used for masking. Default is 255.
-    grid_degrees : int, optional
-        The size of the grid cells in degrees for tiling. Default is 10.
 
     Returns
     -------
@@ -308,53 +304,34 @@ def export_global_pixel_counts_tasks(
         nodata_val=nodata_val,
     )
 
-    # 2. Define 4 global quadrants to avoid the 12-hour timeout
-    quadrants = {
-        "NW": [-180, 0, 0, 90],
-        "NE": [0, 0, 180, 90],
-        "SW": [-180, -90, 0, 0],
-        "SE": [0, -90, 180, 0]
-    }
-
-    # 3. Process each year
+    # 2. Process each year
     for year, image_year in yearly_images:
         image_masked = image_year.updateMask(global_mask)
 
-        for quad_name, (lon_min, lat_min, lon_max, lat_max) in quadrants.items():
-            # 4. Create a localized grid for the quadrant
-            polygons = []
-            for lon in range(lon_min, lon_max, grid_degrees):
-                for lat in range(lat_min, lat_max, grid_degrees):
-                    polygons.append(ee.Feature(ee.Geometry.Rectangle(lon, lat, lon + grid_degrees, lat + grid_degrees)))
-            grid = ee.FeatureCollection(polygons)
+        histogram = image_masked.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=GLOBAL_GEOM,
+            scale=scale,
+            maxPixels=max_pixels,
+            tileScale=16
+        )
 
-            # 5. Execute parallel count using reduceRegions
-            hist_fc = image_masked.reduceRegions(
-                collection=grid,
-                reducer=ee.Reducer.frequencyHistogram(),
-                scale=scale,
-                tileScale=16
-            )
+        counts_dict = ee.Dictionary(histogram.get(GLANCE_CLASS_BAND))
+        feature_collection = ee.FeatureCollection([
+            ee.Feature(None, counts_dict)
+        ])
 
-            def process_feature(feature):
-                counts = feature.get(GLANCE_CLASS_BAND)
-                safe_dict = ee.Dictionary(ee.Algorithms.If(counts, counts, {}))
-                return feature.set(safe_dict).set(GLANCE_CLASS_BAND, None)
+        export_name = f"Pixel_Counts_LULC_{year}"
+        task = ee.batch.Export.table.toDrive(
+            collection=feature_collection,
+            description=export_name,
+            folder=drive_folder,
+            fileFormat="CSV"
+        )
 
-            final_fc = hist_fc.map(process_feature)
-
-            # 6. Export a task for each quadrant
-            export_name = f"Pixel_Counts_LULC_{year}_{quad_name}"
-            task = ee.batch.Export.table.toDrive(
-                collection=final_fc,
-                description=export_name,
-                folder=drive_folder,
-                fileFormat="CSV"
-            )
-
-            task.start()
-            tasks_list.append(task)
-            print(f"Task submitted for year {year} - Quadrant {quad_name}.")
+        task.start()
+        tasks_list.append(task)
+        print(f"Task submitted for year {year}.")
 
     return tasks_list
 
@@ -5592,7 +5569,6 @@ def export_interval_transition_matrices_gee(
     band_name: str,
     scale: int = 300,
     nodata_val: int = 255,
-    grid_degrees: int = 10,
 ) -> list:
     """
     Export LULC transition matrices between consecutive years to Google Drive.
@@ -5631,13 +5607,6 @@ def export_interval_transition_matrices_gee(
         for year, image_year in yearly_images
     }
 
-    # 1. Create a grid of geometries to tile the globe
-    polygons = []
-    for lon in range(-180, 180, grid_degrees):
-        for lat in range(-90, 90, grid_degrees):
-            polygons.append(ee.Feature(ee.Geometry.Rectangle(lon, lat, lon + grid_degrees, lat + grid_degrees)))
-    grid = ee.FeatureCollection(polygons)
-
     for i in range(len(year_list) - 1):
         start_year = year_list[i]
         end_year = year_list[i + 1]
@@ -5647,25 +5616,20 @@ def export_interval_transition_matrices_gee(
 
         transition_img = img_start.multiply(100).add(img_end).rename("transition")
 
-        # 2. Use reduceRegions for fully distributed parallel execution
-        hist_fc = transition_img.reduceRegions(
-            collection=grid,
+        histogram = transition_img.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
+            geometry=GLOBAL_GEOM,
             scale=scale,
+            maxPixels=1e13,
             tileScale=16,
         )
 
-        # 3. Flatten the dictionary so the CSV columns are class IDs
-        def process_feature(feature):
-            counts = feature.get('transition')
-            safe_dict = ee.Dictionary(ee.Algorithms.If(counts, counts, {}))
-            return feature.set(safe_dict).set('transition', None)
-
-        final_fc = hist_fc.map(process_feature)
+        feature = ee.Feature(None, histogram)
+        fc = ee.FeatureCollection([feature])
 
         task_name = f"transition_{start_year}_{end_year}"
         task = ee.batch.Export.table.toDrive(
-            collection=final_fc,
+            collection=fc,
             description=task_name,
             folder=drive_folder,
             fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
