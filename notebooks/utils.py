@@ -3404,55 +3404,6 @@ def annotate_heatmap(
                 fontsize=current_fontsize, color=color, clip_on=True
             )
 
-def _unit_label(suffix: str, base_label: str = "Pixels") -> str:
-    """
-    Build a descriptive label for the colorbar.
-
-    Parameters
-    ----------
-    suffix : str
-        The suffix for the unit (e.g., 'k', 'M').
-    base_label : str, optional
-        The base label text (default is "Pixels").
-
-    Returns
-    -------
-    str
-        The formatted unit label.
-    """
-    if suffix == "hundreds":
-        suffix = ""
-
-    mapping = {
-        "": base_label,
-        "k": f"{base_label} (thousands)",
-        "M": f"{base_label} (millions)",
-        "B": f"{base_label} (billions)",
-        "T": f"{base_label} (trillions)",
-    }
-    return mapping.get(suffix, f"{base_label} ({suffix})")
-
-def _unit_formatter(factor: float, decimals: int = 1):
-    """
-    Build a tick formatter that scales values by a factor.
-
-    Parameters
-    ----------
-    factor : float
-        The factor to divide the values by (e.g., 1000 or 1000000).
-    decimals : int, optional
-        The number of decimal places to include (default is 1).
-
-    Returns
-    -------
-    matplotlib.ticker.FuncFormatter
-        A formatter function for the plot ticks.
-    """
-    fmt = f"{{:.{decimals}f}}"
-    def _fmt(x: float, pos: int) -> str:
-        return fmt.format(x / factor)
-    return mticker.FuncFormatter(_fmt)
-
 def plot_heatmap(
     df: pd.DataFrame,
     title: str,
@@ -3882,7 +3833,9 @@ def plot_heatmap(
             annotate_heatmap(
                 ax=ax,
                 M=matrix_values,
-                fontsize=ann_fontsize
+                fontsize=ann_fontsize,
+                show_diagonal=show_diagonal_values,
+                equalize_diagonal_font=equalize_diagonal_font,
             )
         except NameError:
             pass
@@ -5802,24 +5755,6 @@ class ComponentCalculator:
                 "Shift_Loss": shift,
             })
         return self
-
-
-def _extract_year_str(val) -> str:
-    """
-    Extract the first sequence of digits from a year string or integer.
-
-    Parameters
-    ----------
-    val : str or int
-        The value containing the year (e.g., "time_2000" or 2000).
-
-    Returns
-    -------
-    str
-        The extracted year digits.
-    """
-    match = re.search(r"(\d+)", str(val))
-    return match.group(1) if match else str(val)
 
 
 def process_matrix(
