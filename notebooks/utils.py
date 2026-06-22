@@ -5579,8 +5579,10 @@ def calculate_trajectory_gee(
     # 2. Check if the start class equals the end class
     start_equals_end = start_img.eq(end_img)
 
-    # 3. Verify if all intermediate values match the start value
-    all_match_start = image_stack.eq(start_img).reduce(ee.Reducer.min())
+    # 3. Verify if all intermediate values match the start value (Optimized with native element-wise logical And)
+    all_match_start = image_stack.select(band_names[0]).eq(start_img)
+    for b in band_names[1:]:
+        all_match_start = all_match_start.And(image_stack.select(b).eq(start_img))
 
     # 4. Assign Trajectory 1 for completely stable pixels
     traj_1 = start_equals_end.And(all_match_start).multiply(1)
