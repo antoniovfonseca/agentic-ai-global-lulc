@@ -3153,17 +3153,6 @@ def validate_and_get_interval(
 
     return f"{str_y0}-{str_y1}"
 
-# Define matrix metadata dictionary
-MATRIX_META: Dict[str, list] = {
-    "sum": ["sum", "Time Intervals", "flow"],
-    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
-    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
-    "ext": ["extent", "Extent", "stock"],
-    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
-    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
-    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
-}
-
 def _extract_year_str(val: Union[str, int]) -> str:
     """
     Extract the first sequence of digits from a year string or integer.
@@ -3315,31 +3304,22 @@ def reorder_all_matrices(matrices_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd
     return reordered
 
 
-def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8, 
-                     show_diagonal: bool = False, equalize_diagonal_font: bool = False) -> None:
+def annotate_heatmap(
+    ax: plt.Axes,
+    M: np.ndarray,
+    fontsize: int = 8,
+    show_diagonal: bool = False,
+    equalize_diagonal_font: bool = False,
+) -> None:
     """
     Annotate a heatmap with integer cell values and adaptive text color.
-
-    Parameters
-    ----------
-    ax : matplotlib.axes.Axes
-        The axes object where the heatmap is plotted.
-    m_vals : np.ndarray
-        The matrix containing the values to display.
-    fontsize : int, optional
-        The font size of the annotations (default is 8).
-    show_diagonal : bool, optional
-        If True, annotates the diagonal in white.
-        If False, skips the diagonal.
-    equalize_diagonal_font : bool, optional
-        If True, uses the same font size for all cells.
     """
-    if m_vals.size == 0:
+    if M.size == 0:
         return
 
-    m_off = m_vals.copy()
-    np.fill_diagonal(m_off, np.nan)
-    data_off = m_off[np.isfinite(m_off)]
+    M_off = M.copy()
+    np.fill_diagonal(M_off, np.nan)
+    data_off = M_off[np.isfinite(M_off)]
 
     if data_off.size > 0:
         max_pos = float(np.max(data_off)) if np.any(data_off > 0) else 0.0
@@ -3349,11 +3329,11 @@ def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8,
 
     thresh_pos = 0.5 * max_pos
     thresh_neg = 0.5 * min_neg
-    rows, cols = m_vals.shape
+    rows, cols = M.shape
 
     for i in range(rows):
         for j in range(cols):
-            val = float(m_vals[i, j])
+            val = float(M[i, j])
 
             if i == j:
                 if not show_diagonal:
@@ -6288,11 +6268,6 @@ def compute_and_save_components(
     alt_shift = np.maximum(0, df_s.values - alt_exc - df_e.values)
     np.fill_diagonal(alt_shift, 0.0)
 
-    # Unaccounted Extent (U = E + X + S - M)
-    unacc_ext = df_e.values + alt_exc + alt_shift - df_s.values
-    unacc_ext = np.where(np.abs(unacc_ext) < 1e-9, 0.0, unacc_ext)
-    np.fill_diagonal(unacc_ext, 0.0)
-
     # 3. Export to CSV
     components = {
         "sum": df_s.values,
@@ -6301,7 +6276,6 @@ def compute_and_save_components(
         "quantity_allocation_shift": alloc_shift,
         "alternation_exchange": alt_exc,
         "alternation_shift": alt_shift,
-        "unaccounted_extent": unacc_ext,
     }
 
     for name, data in components.items():
@@ -6384,65 +6358,6 @@ def reorder_matrices_by_net_change(
 #                                                                             #
 ###############################################################################
 
-
-def annotate_heatmap(
-    ax: plt.Axes,
-    M: np.ndarray,
-    fontsize: int = 8,
-) -> None:
-    """
-    Annotate a heatmap with integer cell values and adaptive text color.
-
-    Parameters
-    ----------
-    ax : matplotlib.axes.Axes
-        The axes object where the heatmap is plotted.
-    M : np.ndarray
-        The matrix containing the values to display.
-    fontsize : int, optional
-        The font size of the annotations, by default 8.
-    """
-    if M.size == 0:
-        return
-
-    M_off = M.copy()
-    np.fill_diagonal(M_off, np.nan)
-    data_off = M_off[np.isfinite(M_off)]
-
-    has_pos = np.any(data_off > 0)
-    has_neg = np.any(data_off < 0)
-
-    max_pos = float(np.nanmax(data_off[data_off > 0])) if has_pos else 0.0
-    min_neg = float(np.nanmin(data_off[data_off < 0])) if has_neg else 0.0
-
-    thresh_pos = 0.5 * max_pos if has_pos else np.inf
-    thresh_neg = 0.5 * min_neg if has_neg else -np.inf
-
-    for i in range(M.shape[0]):
-        for j in range(M.shape[1]):
-            # Skip diagonal annotation as per reference
-            if i == j:
-                continue
-
-            v = float(M[i, j])
-            txt = f"{int(round(v))}"
-
-            # Adaptive color logic
-            if (has_pos and v >= thresh_pos) or (has_neg and v <= thresh_neg):
-                color = "white"
-            else:
-                color = "black"
-
-            ax.text(
-                j,
-                i,
-                txt,
-                ha="center",
-                va="center",
-                fontsize=fontsize,
-                color=color,
-                clip_on=True,
-            )
 
 def _unit_label(
     suffix: str,
