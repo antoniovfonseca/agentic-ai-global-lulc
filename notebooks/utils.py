@@ -2997,9 +2997,10 @@ def calculate_aggregated_components_csv(
     mat_s = (mat_sum - mat_x - mat_ext).clip(lower=0)
     
     # Unaccounted Extent (mat_u)
-    mat_u = mat_ext + mat_x + mat_s - mat_sum
-    mat_u = pd.DataFrame(np.where(np.abs(mat_u.values) < 1e-9, 0.0, mat_u.values), index=all_classes, columns=all_classes)
-    
+    # NOTE: This component is mathematically zero when calculated from aggregated matrices.
+    # For non-zero Unaccounted Extent, it must be calculated pixel-by-pixel in GEE
+    # and loaded from its dedicated CSV.
+
     aggregated_matrices = {
         "sum": mat_sum,
         "extent": mat_ext,
@@ -3007,7 +3008,7 @@ def calculate_aggregated_components_csv(
         "quantity_allocation_shift": mat_q,
         "alternation_exchange": mat_x,
         "alternation_shift": mat_s,
-        "unaccounted_extent": mat_u,
+        # "unaccounted_extent": mat_u, # Removed from local calculation
     }
     
     for name, mat in aggregated_matrices.items():
