@@ -2918,11 +2918,23 @@ def export_unaccounted_extent_task_gee(
         nodata_val=nodata_val,
     )
 
-    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
-    unaccounted_mask = trajectory_image.eq(5)
-
     start_img = image_stack.select(band_names[0])
     end_img = image_stack.select(band_names[-1])
+
+    # Identify pixels with overall extent change (start != end)
+    extent_change = start_img.neq(end_img)
+
+    # Determine if there was a direct transition from start class to end class at any step
+    has_direct_transition = ee.Image(0)
+    length = len(band_names)
+    for i in range(length - 1):
+        current_band = image_stack.select(band_names[i])
+        next_band = image_stack.select(band_names[i + 1])
+        is_direct = current_band.eq(start_img).And(next_band.eq(end_img))
+        has_direct_transition = has_direct_transition.Or(is_direct)
+
+    # Unaccounted Extent is defined as extent change (start != end) with NO direct transition
+    unaccounted_mask = extent_change.And(has_direct_transition.Not())
 
     unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
 
