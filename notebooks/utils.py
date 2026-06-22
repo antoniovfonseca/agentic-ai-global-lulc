@@ -35,31 +35,11 @@ DEFAULT_OUTPUT_DIR = "/content/glance_data/output"
 NODATA_VALUE = 255
 GLANCE_COLLECTION_ID = "projects/GLANCE/DATASETS/V001"
 GLANCE_CLASS_BAND = "LC"
-
-# Current bounding box geometry (configured for Europe - EU)
 GLOBAL_GEOM = ee.Geometry.Rectangle(
-    [-25.0, 34.0, 45.0, 72.0],
+    [-180, -90, 180, 90],
     "EPSG:4326",
     False,
 )
-
-# GLanCE official WKT projection system (configured for Europe - EU)
-GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - EU - V01",
-    GEOGCS["GCS_WGS_1984",
-        DATUM["D_WGS_1984",
-            SPHEROID["WGS_1984",6378137.0,298.257223563]],
-        PRIMEM["Greenwich",0.0],
-        UNIT["degree",0.0174532925199433]],
-    PROJECTION["Lambert_Azimuthal_Equal_Area"],
-    PARAMETER["false_easting",0.0],
-    PARAMETER["false_northing",0.0],
-    PARAMETER["longitude_of_center",20],
-    PARAMETER["latitude_of_center",55],
-    UNIT["meter",1.0]]"""
-
-# GLanCE Grid parameters for custom clipping/exporting (configured for Europe - EU)
-GLANCE_RESOLUTION = [30, 30]
-GLANCE_UL_XY = (-5505560.00, 3346245.0)
 
 # 3. Class Metadata
 GLANCE_METADATA = {
@@ -106,8 +86,8 @@ def build_global_valid_mask_and_yearly_images(
 ) -> tuple[ee.Image, list[tuple[int, ee.Image]]]:
     collection = ee.ImageCollection(collection_id).select(band_name)
 
-    global_mask = ee.Image(1)
     yearly_images = []
+    mask_images = []
 
     for year in year_list:
         image_year = collection.filter(
@@ -115,7 +95,11 @@ def build_global_valid_mask_and_yearly_images(
         ).mosaic()
 
         yearly_images.append((year, image_year))
-        global_mask = global_mask.And(image_year.neq(nodata_val))
+        mask_images.append(image_year.neq(nodata_val))
+
+    # Optimize computation graph using a flattened ImageCollection reducer
+    mask_collection = ee.ImageCollection.fromImages(mask_images)
+    global_mask = mask_collection.min().eq(1)
 
     return global_mask, yearly_images
 
@@ -288,13 +272,15 @@ def export_global_pixel_counts_tasks(
     scale: int = 30,
     max_pixels: float = 1e13,
     nodata_val: int = NODATA_VALUE,
+    grid_degrees: int = 10,
+
 ) -> list:
     """
     Triggers GEE tasks to calculate pixel counts for global GLANCE images.
 
-    This function calculates the frequency histogram of LULC classes globally
-    using a single reduceRegion call per year and exports the result directly
-    as a single CSV file per year.
+    This function avoids the 12-hour GEE timeout by splitting the globe into
+    four quadrants and exporting a separate task for each. It also uses a
+    tiled `reduceRegions` approach within each quadrant for efficiency.
 
     Parameters
     ----------
@@ -2894,57 +2880,6 @@ def export_global_transition_tasks(
 
     return triggered_tasks
 
-def export_unaccounted_extent_task_gee(
-    year_list: list,
-    drive_folder: str,
-    scale: int = 300,
-    nodata_val: int = NODATA_VALUE,
-) -> ee.batch.Task:
-    """
-    Computes the Unaccounted Extent component pixel-by-pixel within GEE
-    and exports the aggregated matrix as a CSV.
-    """
-    print(f"Preparing Unaccounted Extent GEE Task for {year_list[0]}-{year_list[-1]}...")
-
-    image_stack, band_names = build_glance_stack(
-        year_list=year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=nodata_val,
-    )
-
-    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
-    unaccounted_mask = trajectory_image.eq(5)
-
-    start_img = image_stack.select(band_names[0])
-    end_img = image_stack.select(band_names[-1])
-
-    unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
-
-    histogram = unaccounted_transition_code.reduceRegion(
-        reducer=ee.Reducer.frequencyHistogram(),
-        geometry=GLOBAL_GEOM,
-        scale=scale,
-        maxPixels=1e13,
-        tileScale=16,
-    ).get('transition')
-
-    hist_dict = ee.Dictionary(ee.Algorithms.If(histogram, histogram, {}))
-    feature = ee.Feature(None, hist_dict)
-    fc = ee.FeatureCollection([feature])
-
-    task_desc = f"Unaccounted_Extent_{year_list[0]}_{year_list[-1]}"
-    task = ee.batch.Export.table.toDrive(
-        collection=fc,
-        description=task_desc,
-        folder=drive_folder,
-        fileNamePrefix=f"transition_matrix_unaccounted_extent_{year_list[0]}-{year_list[-1]}",
-        fileFormat="CSV"
-    )
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
-    return task
-
 # ---------------------------------------------------------------------------
 # 6.2 COMPUTE AGGREGATION MATRICES
 # ---------------------------------------------------------------------------
@@ -3048,10 +2983,8 @@ def calculate_aggregated_components_csv(
     mat_s = (mat_sum - mat_x - mat_ext).clip(lower=0)
     
     # Unaccounted Extent (mat_u)
-    # NOTE: This component is mathematically zero when calculated from aggregated matrices.
-    # For non-zero Unaccounted Extent, it must be calculated pixel-by-pixel in GEE
-    # and loaded from its dedicated CSV.
-
+    mat_u = mat_ext + mat_x + mat_s - mat_sum
+    
     aggregated_matrices = {
         "sum": mat_sum,
         "extent": mat_ext,
@@ -3059,7 +2992,7 @@ def calculate_aggregated_components_csv(
         "quantity_allocation_shift": mat_q,
         "alternation_exchange": mat_x,
         "alternation_shift": mat_s,
-        # "unaccounted_extent": mat_u, # Removed from local calculation
+        "unaccounted_extent": mat_u,
     }
     
     for name, mat in aggregated_matrices.items():
@@ -3203,6 +3136,17 @@ def validate_and_get_interval(
     str_y1 = _extract_year_str(years[-1])
 
     return f"{str_y0}-{str_y1}"
+
+# Define matrix metadata dictionary
+MATRIX_META: Dict[str, list] = {
+    "sum": ["sum", "Time Intervals", "flow"],
+    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
+    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
+    "ext": ["extent", "Extent", "stock"],
+    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
+    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
+    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
+}
 
 def _extract_year_str(val: Union[str, int]) -> str:
     """
@@ -3355,22 +3299,31 @@ def reorder_all_matrices(matrices_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd
     return reordered
 
 
-def annotate_heatmap(
-    ax: plt.Axes,
-    M: np.ndarray,
-    fontsize: int = 8,
-    show_diagonal: bool = False,
-    equalize_diagonal_font: bool = False,
-) -> None:
+def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8, 
+                     show_diagonal: bool = False, equalize_diagonal_font: bool = False) -> None:
     """
     Annotate a heatmap with integer cell values and adaptive text color.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        The axes object where the heatmap is plotted.
+    m_vals : np.ndarray
+        The matrix containing the values to display.
+    fontsize : int, optional
+        The font size of the annotations (default is 8).
+    show_diagonal : bool, optional
+        If True, annotates the diagonal in white.
+        If False, skips the diagonal.
+    equalize_diagonal_font : bool, optional
+        If True, uses the same font size for all cells.
     """
-    if M.size == 0:
+    if m_vals.size == 0:
         return
 
-    M_off = M.copy()
-    np.fill_diagonal(M_off, np.nan)
-    data_off = M_off[np.isfinite(M_off)]
+    m_off = m_vals.copy()
+    np.fill_diagonal(m_off, np.nan)
+    data_off = m_off[np.isfinite(m_off)]
 
     if data_off.size > 0:
         max_pos = float(np.max(data_off)) if np.any(data_off > 0) else 0.0
@@ -3380,11 +3333,11 @@ def annotate_heatmap(
 
     thresh_pos = 0.5 * max_pos
     thresh_neg = 0.5 * min_neg
-    rows, cols = M.shape
+    rows, cols = m_vals.shape
 
     for i in range(rows):
         for j in range(cols):
-            val = float(M[i, j])
+            val = float(m_vals[i, j])
 
             if i == j:
                 if not show_diagonal:
@@ -3403,6 +3356,55 @@ def annotate_heatmap(
                 j, i, txt, ha="center", va="center",
                 fontsize=current_fontsize, color=color, clip_on=True
             )
+
+def _unit_label(suffix: str, base_label: str = "Pixels") -> str:
+    """
+    Build a descriptive label for the colorbar.
+
+    Parameters
+    ----------
+    suffix : str
+        The suffix for the unit (e.g., 'k', 'M').
+    base_label : str, optional
+        The base label text (default is "Pixels").
+
+    Returns
+    -------
+    str
+        The formatted unit label.
+    """
+    if suffix == "hundreds":
+        suffix = ""
+
+    mapping = {
+        "": base_label,
+        "k": f"{base_label} (thousands)",
+        "M": f"{base_label} (millions)",
+        "B": f"{base_label} (billions)",
+        "T": f"{base_label} (trillions)",
+    }
+    return mapping.get(suffix, f"{base_label} ({suffix})")
+
+def _unit_formatter(factor: float, decimals: int = 1):
+    """
+    Build a tick formatter that scales values by a factor.
+
+    Parameters
+    ----------
+    factor : float
+        The factor to divide the values by (e.g., 1000 or 1000000).
+    decimals : int, optional
+        The number of decimal places to include (default is 1).
+
+    Returns
+    -------
+    matplotlib.ticker.FuncFormatter
+        A formatter function for the plot ticks.
+    """
+    fmt = f"{{:.{decimals}f}}"
+    def _fmt(x: float, pos: int) -> str:
+        return fmt.format(x / factor)
+    return mticker.FuncFormatter(_fmt)
 
 def plot_heatmap(
     df: pd.DataFrame,
@@ -5575,6 +5577,7 @@ def export_interval_transition_matrices_gee(
     band_name: str,
     scale: int = 300,
     nodata_val: int = 255,
+    grid_degrees: int = 10,
 ) -> list:
     """
     Export LULC transition matrices between consecutive years to Google Drive.
@@ -5613,6 +5616,13 @@ def export_interval_transition_matrices_gee(
         for year, image_year in yearly_images
     }
 
+    # 1. Create a grid of geometries to tile the globe
+    polygons = []
+    for lon in range(-180, 180, grid_degrees):
+        for lat in range(-90, 90, grid_degrees):
+            polygons.append(ee.Feature(ee.Geometry.Rectangle(lon, lat, lon + grid_degrees, lat + grid_degrees)))
+    grid = ee.FeatureCollection(polygons)
+
     for i in range(len(year_list) - 1):
         start_year = year_list[i]
         end_year = year_list[i + 1]
@@ -5622,20 +5632,25 @@ def export_interval_transition_matrices_gee(
 
         transition_img = img_start.multiply(100).add(img_end).rename("transition")
 
-        histogram = transition_img.reduceRegion(
+        # 2. Use reduceRegions for fully distributed parallel execution
+        hist_fc = transition_img.reduceRegions(
+            collection=grid,
             reducer=ee.Reducer.frequencyHistogram(),
-            geometry=GLOBAL_GEOM,
             scale=scale,
-            maxPixels=1e13,
             tileScale=16,
         )
 
-        feature = ee.Feature(None, histogram)
-        fc = ee.FeatureCollection([feature])
+        # 3. Flatten the dictionary so the CSV columns are class IDs
+        def process_feature(feature):
+            counts = feature.get('transition')
+            safe_dict = ee.Dictionary(ee.Algorithms.If(counts, counts, {}))
+            return feature.set(safe_dict).set('transition', None)
+
+        final_fc = hist_fc.map(process_feature)
 
         task_name = f"transition_{start_year}_{end_year}"
         task = ee.batch.Export.table.toDrive(
-            collection=fc,
+            collection=final_fc,
             description=task_name,
             folder=drive_folder,
             fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
@@ -6219,6 +6234,21 @@ def compute_and_save_components(
     -------
     None
     """
+    def _get_exchange_and_shift(
+        matrix: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Decompose matrix into positive Exchange and signed Shift."""
+        m_calc = matrix.copy()
+        np.fill_diagonal(m_calc, 0.0)
+        
+        # Exchange captures symmetrical swaps (always positive magnitude)
+        exchange = np.maximum(0, np.minimum(m_calc, m_calc.T))
+        
+        # Shift is the signed algebraic remainder
+        shift = m_calc - exchange
+        
+        return exchange, shift
+
     # 1. Align and Sort Matrices based on GLANCE_METADATA order
     name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
     
@@ -6240,26 +6270,18 @@ def compute_and_save_components(
 
     # 2. Calculate Components
     # Allocation: Based on direct Extent matrix
-    m_calc_e = df_e.values.copy()
-    np.fill_diagonal(m_calc_e, 0.0)
-    alloc_exc = np.maximum(0, np.minimum(m_calc_e, m_calc_e.T))
-    alloc_shift = m_calc_e - alloc_exc
+    alloc_exc, alloc_shift = _get_exchange_and_shift(df_e.values)
 
     # Alternation: Sum - Extent (Removes np.maximum to allow negative shifts)
     alternation_raw = df_s.values - df_e.values
-    np.fill_diagonal(alternation_raw, 0.0)
-    alt_exc = np.maximum(0, np.minimum(alternation_raw, alternation_raw.T))
-    
-    # Alternation Shift with non-negative constraint
-    alt_shift = np.maximum(0, df_s.values - alt_exc - df_e.values)
-    np.fill_diagonal(alt_shift, 0.0)
+    alt_exc, alt_shift = _get_exchange_and_shift(alternation_raw)
 
     # 3. Export to CSV
     components = {
         "sum": df_s.values,
         "extent": df_e.values,
         "allocation_exchange": alloc_exc,
-        "quantity_allocation_shift": alloc_shift,
+        "allocation_shift": alloc_shift,
         "alternation_exchange": alt_exc,
         "alternation_shift": alt_shift,
     }
@@ -6344,6 +6366,65 @@ def reorder_matrices_by_net_change(
 #                                                                             #
 ###############################################################################
 
+
+def annotate_heatmap(
+    ax: plt.Axes,
+    M: np.ndarray,
+    fontsize: int = 8,
+) -> None:
+    """
+    Annotate a heatmap with integer cell values and adaptive text color.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        The axes object where the heatmap is plotted.
+    M : np.ndarray
+        The matrix containing the values to display.
+    fontsize : int, optional
+        The font size of the annotations, by default 8.
+    """
+    if M.size == 0:
+        return
+
+    M_off = M.copy()
+    np.fill_diagonal(M_off, np.nan)
+    data_off = M_off[np.isfinite(M_off)]
+
+    has_pos = np.any(data_off > 0)
+    has_neg = np.any(data_off < 0)
+
+    max_pos = float(np.nanmax(data_off[data_off > 0])) if has_pos else 0.0
+    min_neg = float(np.nanmin(data_off[data_off < 0])) if has_neg else 0.0
+
+    thresh_pos = 0.5 * max_pos if has_pos else np.inf
+    thresh_neg = 0.5 * min_neg if has_neg else -np.inf
+
+    for i in range(M.shape[0]):
+        for j in range(M.shape[1]):
+            # Skip diagonal annotation as per reference
+            if i == j:
+                continue
+
+            v = float(M[i, j])
+            txt = f"{int(round(v))}"
+
+            # Adaptive color logic
+            if (has_pos and v >= thresh_pos) or (has_neg and v <= thresh_neg):
+                color = "white"
+            else:
+                color = "black"
+
+            ax.text(
+                j,
+                i,
+                txt,
+                ha="center",
+                va="center",
+                fontsize=fontsize,
+                color=color,
+                clip_on=True,
+            )
 
 def _unit_label(
     suffix: str,
