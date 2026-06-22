@@ -2911,34 +2911,37 @@ def export_unaccounted_extent_task_gee(
     """
     print(f"Preparing Unaccounted Extent GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
+    # 1. Build an optimized global mask and mosaic each year exactly once
+    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
 
-    y_start = year_list[0]
-    y_end = year_list[-1]
+    # Create an efficient dictionary referencing the pre-built, masked images
+    yearly_by_year = {y: img.updateMask(global_mask) for y, img in yearly_images}
 
-    start_img = collection.filter(ee.Filter.calendarRange(y_start, y_start, "year")).mosaic()
-    end_img = collection.filter(ee.Filter.calendarRange(y_end, y_end, "year")).mosaic()
+    start_img = yearly_by_year[year_list[0]]
+    end_img = yearly_by_year[year_list[-1]]
 
-    # Initialize valid mask: start and end must be valid, and different (extent change)
-    valid_mask = start_img.neq(nodata_val).And(end_img.neq(nodata_val)).And(start_img.neq(end_img))
+    # Identify pixels with overall extent change (start != end)
+    extent_change = start_img.neq(end_img)
 
-    # Determine if there was a direct transition from start class to end class at any intermediate step
+    # 2. Determine if there was a direct transition from start class to end class at any intermediate step
     has_direct_transition = ee.Image(0)
     for i in range(len(year_list) - 1):
         y_curr = year_list[i]
         y_next = year_list[i + 1]
 
-        img_curr = collection.filter(ee.Filter.calendarRange(y_curr, y_curr, "year")).mosaic()
-        img_next = collection.filter(ee.Filter.calendarRange(y_next, y_next, "year")).mosaic()
-
-        # Update valid mask to ensure intermediate transitions are also valid
-        valid_mask = valid_mask.And(img_curr.neq(nodata_val)).And(img_next.neq(nodata_val))
+        img_curr = yearly_by_year[y_curr]
+        img_next = yearly_by_year[y_next]
 
         is_direct = img_curr.eq(start_img).And(img_next.eq(end_img))
         has_direct_transition = has_direct_transition.Or(is_direct)
 
-    # Unaccounted mask: Overall change but NO direct transition at any step
-    unaccounted_mask = valid_mask.And(has_direct_transition.Not())
+    # 3. Unaccounted mask: Overall change but NO direct transition at any step
+    unaccounted_mask = extent_change.And(has_direct_transition.Not())
 
     unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
 
