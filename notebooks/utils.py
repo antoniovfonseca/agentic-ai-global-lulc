@@ -2894,6 +2894,57 @@ def export_global_transition_tasks(
 
     return triggered_tasks
 
+def export_unaccounted_extent_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = NODATA_VALUE,
+) -> ee.batch.Task:
+    """
+    Computes the Unaccounted Extent component pixel-by-pixel within GEE
+    and exports the aggregated matrix as a CSV.
+    """
+    print(f"Preparing Unaccounted Extent GEE Task for {year_list[0]}-{year_list[-1]}...")
+
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
+
+    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
+    unaccounted_mask = trajectory_image.eq(5)
+
+    start_img = image_stack.select(band_names[0])
+    end_img = image_stack.select(band_names[-1])
+
+    unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
+
+    histogram = unaccounted_transition_code.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram(),
+        geometry=GLOBAL_GEOM,
+        scale=scale,
+        maxPixels=1e13,
+        tileScale=16,
+    ).get('transition')
+
+    hist_dict = ee.Dictionary(ee.Algorithms.If(histogram, histogram, {}))
+    feature = ee.Feature(None, hist_dict)
+    fc = ee.FeatureCollection([feature])
+
+    task_desc = f"Unaccounted_Extent_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.table.toDrive(
+        collection=fc,
+        description=task_desc,
+        folder=drive_folder,
+        fileNamePrefix=f"transition_matrix_unaccounted_extent_{year_list[0]}-{year_list[-1]}",
+        fileFormat="CSV"
+    )
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
+    return task
+
 # ---------------------------------------------------------------------------
 # 6.2 COMPUTE AGGREGATION MATRICES
 # ---------------------------------------------------------------------------
