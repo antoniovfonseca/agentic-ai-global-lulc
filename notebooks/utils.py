@@ -6251,21 +6251,6 @@ def compute_and_save_components(
     -------
     None
     """
-    def _get_exchange_and_shift(
-        matrix: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Decompose matrix into positive Exchange and signed Shift."""
-        m_calc = matrix.copy()
-        np.fill_diagonal(m_calc, 0.0)
-        
-        # Exchange captures symmetrical swaps (always positive magnitude)
-        exchange = np.maximum(0, np.minimum(m_calc, m_calc.T))
-        
-        # Shift is the signed algebraic remainder
-        shift = m_calc - exchange
-        
-        return exchange, shift
-
     # 1. Align and Sort Matrices based on GLANCE_METADATA order
     name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
     
@@ -6287,20 +6272,33 @@ def compute_and_save_components(
 
     # 2. Calculate Components
     # Allocation: Based on direct Extent matrix
-    alloc_exc, alloc_shift = _get_exchange_and_shift(df_e.values)
+    m_calc_e = df_e.values.copy()
+    np.fill_diagonal(m_calc_e, 0.0)
+    alloc_exc = np.maximum(0, np.minimum(m_calc_e, m_calc_e.T))
+    alloc_shift = m_calc_e - alloc_exc
 
     # Alternation: Sum - Extent (Removes np.maximum to allow negative shifts)
     alternation_raw = df_s.values - df_e.values
-    alt_exc, alt_shift = _get_exchange_and_shift(alternation_raw)
+    np.fill_diagonal(alternation_raw, 0.0)
+    alt_exc = np.maximum(0, np.minimum(alternation_raw, alternation_raw.T))
+    
+    # Alternation Shift with non-negative constraint
+    alt_shift = np.maximum(0, df_s.values - alt_exc - df_e.values)
+    np.fill_diagonal(alt_shift, 0.0)
+
+    # Unaccounted Extent (U = E + X + S - M)
+    unacc_ext = df_e.values + alt_exc + alt_shift - df_s.values
+    np.fill_diagonal(unacc_ext, 0.0)
 
     # 3. Export to CSV
     components = {
         "sum": df_s.values,
         "extent": df_e.values,
         "allocation_exchange": alloc_exc,
-        "allocation_shift": alloc_shift,
+        "quantity_allocation_shift": alloc_shift,
         "alternation_exchange": alt_exc,
         "alternation_shift": alt_shift,
+        "unaccounted_extent": unacc_ext,
     }
 
     for name, data in components.items():
