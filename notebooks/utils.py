@@ -35,11 +35,31 @@ DEFAULT_OUTPUT_DIR = "/content/glance_data/output"
 NODATA_VALUE = 255
 GLANCE_COLLECTION_ID = "projects/GLANCE/DATASETS/V001"
 GLANCE_CLASS_BAND = "LC"
+
+# Current bounding box geometry (configured for Antarctica - AN)
 GLOBAL_GEOM = ee.Geometry.Rectangle(
-    [-180, -90, 180, 90],
+    [-180.0, -90.0, 180.0, -60.0],
     "EPSG:4326",
     False,
 )
+
+# GLanCE official WKT projection system (configured for Antarctica - AN)
+GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AN - V01",
+    GEOGCS["GCS_WGS_1984",
+        DATUM["D_WGS_1984",
+            SPHEROID["WGS_1984",6378137.0,298.257223563]],
+        PRIMEM["Greenwich",0.0],
+        UNIT["degree",0.0174532925199433]],
+    PROJECTION["Lambert_Azimuthal_Equal_Area"],
+    PARAMETER["false_easting",0.0],
+    PARAMETER["false_northing",0.0],
+    PARAMETER["longitude_of_center",0],
+    PARAMETER["latitude_of_center",-90],
+    UNIT["meter",1.0]]"""
+
+# GLanCE Grid parameters for custom clipping/exporting (configured for Antarctica - AN)
+GLANCE_RESOLUTION = [30, 30]
+GLANCE_UL_XY = (-3662210.00, 5169375.0)
 
 # 3. Class Metadata
 GLANCE_METADATA = {
@@ -97,7 +117,7 @@ def build_global_valid_mask_and_yearly_images(
         yearly_images.append((year, image_year))
         mask_images.append(image_year.neq(nodata_val))
 
-    # Optimize computation graph using a flattened ImageCollection reducer
+    # Optimize computation graph by flattening the mask creation
     mask_collection = ee.ImageCollection.fromImages(mask_images)
     global_mask = mask_collection.min().eq(1)
 
@@ -272,15 +292,14 @@ def export_global_pixel_counts_tasks(
     scale: int = 30,
     max_pixels: float = 1e13,
     nodata_val: int = NODATA_VALUE,
-    grid_degrees: int = 10,
 
 ) -> list:
     """
     Triggers GEE tasks to calculate pixel counts for global GLANCE images.
 
-    This function avoids the 12-hour GEE timeout by splitting the globe into
-    four quadrants and exporting a separate task for each. It also uses a
-    tiled `reduceRegions` approach within each quadrant for efficiency.
+    This function avoids client-side timeouts by tiling the global geometry and
+    mapping a reduction over the tiles on the server side. The results for each
+    tile are exported to a single CSV per year, which can be aggregated later.
 
     Parameters
     ----------
@@ -300,6 +319,7 @@ def export_global_pixel_counts_tasks(
     list of ee.batch.Task
         A list containing all the triggered Earth Engine tasks.
     """
+    glance_collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
     tasks_list = []
 
     # 1. Build a global mask for pixels valid in all years
@@ -310,7 +330,6 @@ def export_global_pixel_counts_tasks(
         nodata_val=nodata_val,
     )
 
-    # 2. Process each year
     for year, image_year in yearly_images:
         image_masked = image_year.updateMask(global_mask)
 
@@ -2880,6 +2899,57 @@ def export_global_transition_tasks(
 
     return triggered_tasks
 
+def export_unaccounted_extent_task_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+    nodata_val: int = NODATA_VALUE,
+) -> ee.batch.Task:
+    """
+    Computes the Unaccounted Extent component pixel-by-pixel within GEE
+    and exports the aggregated matrix as a CSV.
+    """
+    print(f"Preparing Unaccounted Extent GEE Task for {year_list[0]}-{year_list[-1]}...")
+
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
+
+    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
+    unaccounted_mask = trajectory_image.eq(5)
+
+    start_img = image_stack.select(band_names[0])
+    end_img = image_stack.select(band_names[-1])
+
+    unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
+
+    histogram = unaccounted_transition_code.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram(),
+        geometry=GLOBAL_GEOM,
+        scale=scale,
+        maxPixels=1e13,
+        tileScale=16,
+    ).get('transition')
+
+    hist_dict = ee.Dictionary(ee.Algorithms.If(histogram, histogram, {}))
+    feature = ee.Feature(None, {'transition': hist_dict})
+    fc = ee.FeatureCollection([feature])
+
+    task_desc = f"Unaccounted_Extent_{year_list[0]}_{year_list[-1]}"
+    task = ee.batch.Export.table.toDrive(
+        collection=fc,
+        description=task_desc,
+        folder=drive_folder,
+        fileNamePrefix=f"transition_matrix_unaccounted_extent_{year_list[0]}-{year_list[-1]}",
+        fileFormat="CSV"
+    )
+    task.start()
+    print(f"Task '{task_desc}' submitted to Google Earth Engine.")
+    return task
+
 # ---------------------------------------------------------------------------
 # 6.2 COMPUTE AGGREGATION MATRICES
 # ---------------------------------------------------------------------------
@@ -2982,9 +3052,6 @@ def calculate_aggregated_components_csv(
     # Alternation Shift (mat_s)
     mat_s = (mat_sum - mat_x - mat_ext).clip(lower=0)
     
-    # Unaccounted Extent (mat_u)
-    mat_u = mat_ext + mat_x + mat_s - mat_sum
-    
     aggregated_matrices = {
         "sum": mat_sum,
         "extent": mat_ext,
@@ -2992,7 +3059,6 @@ def calculate_aggregated_components_csv(
         "quantity_allocation_shift": mat_q,
         "alternation_exchange": mat_x,
         "alternation_shift": mat_s,
-        "unaccounted_extent": mat_u,
     }
     
     for name, mat in aggregated_matrices.items():
@@ -3185,6 +3251,19 @@ def load_square_matrix(csv_path: str) -> pd.DataFrame:
     """
     df = pd.read_csv(csv_path, index_col=0)
 
+    # Detect if this is a raw GEE dictionary CSV (contains a column with '{' and '=')
+    is_raw = False
+    for col in df.columns:
+        if df[col].dropna().empty: # Check if column is empty before accessing iloc[0]
+            continue
+        val = str(df[col].iloc[0])
+        if val.startswith("{") and "=" in val:
+            is_raw = True
+            break
+
+    if is_raw:
+        df = parse_gee_raw_csv(csv_path)
+
     df.index = df.index.map(str)
     df.columns = df.columns.map(str)
 
@@ -3299,8 +3378,13 @@ def reorder_all_matrices(matrices_dict: Dict[str, pd.DataFrame]) -> Dict[str, pd
     return reordered
 
 
-def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8, 
-                     show_diagonal: bool = False, equalize_diagonal_font: bool = False) -> None:
+def annotate_heatmap(
+    ax: plt.Axes,
+    M: np.ndarray,
+    fontsize: int = 8,
+    show_diagonal: bool = False,
+    equalize_diagonal_font: bool = False,
+) -> None:
     """
     Annotate a heatmap with integer cell values and adaptive text color.
 
@@ -3308,7 +3392,7 @@ def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8,
     ----------
     ax : matplotlib.axes.Axes
         The axes object where the heatmap is plotted.
-    m_vals : np.ndarray
+    M : np.ndarray
         The matrix containing the values to display.
     fontsize : int, optional
         The font size of the annotations (default is 8).
@@ -3318,10 +3402,10 @@ def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8,
     equalize_diagonal_font : bool, optional
         If True, uses the same font size for all cells.
     """
-    if m_vals.size == 0:
+    if M.size == 0:
         return
 
-    m_off = m_vals.copy()
+    m_off = M.copy()
     np.fill_diagonal(m_off, np.nan)
     data_off = m_off[np.isfinite(m_off)]
 
@@ -3333,11 +3417,11 @@ def annotate_heatmap(ax: plt.Axes, m_vals: np.ndarray, fontsize: int = 8,
 
     thresh_pos = 0.5 * max_pos
     thresh_neg = 0.5 * min_neg
-    rows, cols = m_vals.shape
+    rows, cols = M.shape
 
     for i in range(rows):
         for j in range(cols):
-            val = float(m_vals[i, j])
+            val = float(M[i, j])
 
             if i == j:
                 if not show_diagonal:
@@ -5577,7 +5661,6 @@ def export_interval_transition_matrices_gee(
     band_name: str,
     scale: int = 300,
     nodata_val: int = 255,
-    grid_degrees: int = 10,
 ) -> list:
     """
     Export LULC transition matrices between consecutive years to Google Drive.
@@ -5616,13 +5699,6 @@ def export_interval_transition_matrices_gee(
         for year, image_year in yearly_images
     }
 
-    # 1. Create a grid of geometries to tile the globe
-    polygons = []
-    for lon in range(-180, 180, grid_degrees):
-        for lat in range(-90, 90, grid_degrees):
-            polygons.append(ee.Feature(ee.Geometry.Rectangle(lon, lat, lon + grid_degrees, lat + grid_degrees)))
-    grid = ee.FeatureCollection(polygons)
-
     for i in range(len(year_list) - 1):
         start_year = year_list[i]
         end_year = year_list[i + 1]
@@ -5632,25 +5708,20 @@ def export_interval_transition_matrices_gee(
 
         transition_img = img_start.multiply(100).add(img_end).rename("transition")
 
-        # 2. Use reduceRegions for fully distributed parallel execution
-        hist_fc = transition_img.reduceRegions(
-            collection=grid,
+        histogram = transition_img.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
+            geometry=GLOBAL_GEOM,
             scale=scale,
+            maxPixels=1e13,
             tileScale=16,
         )
 
-        # 3. Flatten the dictionary so the CSV columns are class IDs
-        def process_feature(feature):
-            counts = feature.get('transition')
-            safe_dict = ee.Dictionary(ee.Algorithms.If(counts, counts, {}))
-            return feature.set(safe_dict).set('transition', None)
-
-        final_fc = hist_fc.map(process_feature)
+        feature = ee.Feature(None, histogram)
+        fc = ee.FeatureCollection([feature])
 
         task_name = f"transition_{start_year}_{end_year}"
         task = ee.batch.Export.table.toDrive(
-            collection=final_fc,
+            collection=fc,
             description=task_name,
             folder=drive_folder,
             fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
@@ -6141,6 +6212,7 @@ def save_area_matrices_to_csv(
 def compute_sum_matrix(
     input_dir: str,
     output_path: str,
+    file_prefix: str = "transition_",
 ) -> pd.DataFrame:
     """
     Compute the SUM transition matrix by aggregating all annual intervals.
@@ -6148,26 +6220,26 @@ def compute_sum_matrix(
     Parameters
     ----------
     input_dir : str
-        Path to the directory containing annual km2 CSV files.
+        Path to the directory containing annual transition CSV files.
     output_path : str
         Full path (including filename) to save the resulting SUM matrix.
+    file_prefix : str, optional
+        Prefix of the annual transition files to look for, by default "transition_".
 
     Returns
     -------
     pd.DataFrame
         The aggregated SUM transition matrix.
     """
-    # 1. List all annual transition files (e.g., 2001_2002, 2002_2003...)
-    # Matches the pattern: transition_matrix_km2_YYYY_YYYY.csv
-    file_pattern = os.path.join(
-        input_dir,
-        "transition_matrix_km2_????_????.csv",
-    )
-    all_files = glob.glob(file_pattern)
+    # 1. List all annual transition files (e.g., transition_2001_2002.csv, transition_2002_2003.csv...)
+    pattern_underscore = os.path.join(input_dir, f"{file_prefix}????_????.csv")
+    pattern_hyphen = os.path.join(input_dir, f"{file_prefix}????-????.csv")
+    
+    all_files = glob.glob(pattern_underscore) + glob.glob(pattern_hyphen)
 
     if not all_files:
         raise FileNotFoundError(
-            f"No annual km2 matrices found in {input_dir}",
+            f"No annual transition matrices found in {input_dir} with prefix '{file_prefix}'",
         )
 
     # 2. Sort files to ensure chronological order (optional, but good practice)
@@ -6177,11 +6249,8 @@ def compute_sum_matrix(
 
     # 3. Iterate and aggregate
     for file_path in all_files:
-        # Load current annual matrix
-        df_annual = pd.read_csv(
-            file_path,
-            index_col=0,
-        )
+        # Load current annual matrix (using load_square_matrix to handle raw/square formats)
+        df_annual = load_square_matrix(file_path)
 
         if df_sum is None:
             # Initialize with the first matrix
