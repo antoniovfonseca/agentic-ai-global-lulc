@@ -3289,28 +3289,29 @@ def load_square_matrix(csv_path: str) -> pd.DataFrame:
     df.columns = df.columns.map(str)
 
     if list(df.index) != list(df.columns):
-            # Safe sorting logic that handles both class IDs and class names
-            name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
-            for k, v in GLANCE_METADATA.items():
-                if "rename" in v:
-                    name_to_id[v["rename"]] = k
+        # Safe sorting logic that handles both class IDs and class names
+        name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
+        for k, v in GLANCE_METADATA.items():
+            if "rename" in v:
+                name_to_id[v["rename"]] = k
 
-            def safe_sort_key(label):
-                label_str = str(label)
-                if label_str in name_to_id:
-                    return (0, name_to_id[label_str])
-                try:
-                    return (0, int(label_str))
-                except (ValueError, TypeError):
-                    return (1, label_str)
+        def safe_sort_key(label):
+            label_str = str(label)
+            if label_str in name_to_id:
+                return (0, name_to_id[label_str])
+            try:
+                return (0, int(label_str))
+            except (ValueError, TypeError):
+                return (1, label_str)
 
         labels = sorted(
             set(df.index).union(df.columns),
-                key=safe_sort_key,
+            key=safe_sort_key,
         )
         df = df.reindex(
             index=labels,
-            columns=labels).fillna(0.0)
+            columns=labels
+        ).fillna(0.0)
 
     if df.shape[0] != df.shape[1]:
         raise ValueError(f"Matrix not square after alignment: {csv_path}")
