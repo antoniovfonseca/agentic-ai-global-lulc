@@ -2911,42 +2911,76 @@ def export_unaccounted_extent_task_gee(
     """
     print(f"Preparing Unaccounted Extent GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    image_stack, band_names = build_glance_stack(
-        year_list=year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=nodata_val,
-    )
+    collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
 
-    start_img = image_stack.select(band_names[0])
-    end_img = image_stack.select(band_names[-1])
+    y_start = year_list[0]
+    y_end = year_list[-1]
 
-    # Identify pixels with overall extent change (start != end)
-    extent_change = start_img.neq(end_img)
+    start_img = collection.filter(ee.Filter.calendarRange(y_start, y_start, "year")).mosaic()
+    end_img = collection.filter(ee.Filter.calendarRange(y_end, y_end, "year")).mosaic()
 
-    # Determine if there was a direct transition from start class to end class at any step
+    # Initialize valid mask: start and end must be valid, and different (extent change)
+    valid_mask = start_img.neq(nodata_val).And(end_img.neq(nodata_val)).And(start_img.neq(end_img))
+
+    # Determine if there was a direct transition from start class to end class at any intermediate step
     has_direct_transition = ee.Image(0)
-    length = len(band_names)
-    for i in range(length - 1):
-        current_band = image_stack.select(band_names[i])
-        next_band = image_stack.select(band_names[i + 1])
-        is_direct = current_band.eq(start_img).And(next_band.eq(end_img))
+    for i in range(len(year_list) - 1):
+        y_curr = year_list[i]
+        y_next = year_list[i + 1]
+
+        img_curr = collection.filter(ee.Filter.calendarRange(y_curr, y_curr, "year")).mosaic()
+        img_next = collection.filter(ee.Filter.calendarRange(y_next, y_next, "year")).mosaic()
+
+        # Update valid mask to ensure intermediate transitions are also valid
+        valid_mask = valid_mask.And(img_curr.neq(nodata_val)).And(img_next.neq(nodata_val))
+
+        is_direct = img_curr.eq(start_img).And(img_next.eq(end_img))
         has_direct_transition = has_direct_transition.Or(is_direct)
 
-    # Unaccounted Extent is defined as extent change (start != end) with NO direct transition
-    unaccounted_mask = extent_change.And(has_direct_transition.Not())
+    # Unaccounted mask: Overall change but NO direct transition at any step
+    unaccounted_mask = valid_mask.And(has_direct_transition.Not())
 
     unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
 
+    # Use fixedHistogram for highly optimized static binning instead of dynamic frequencyHistogram
     histogram = unaccounted_transition_code.reduceRegion(
-        reducer=ee.Reducer.frequencyHistogram(),
+        reducer=ee.Reducer.fixedHistogram(100, 800, 700),
         geometry=GLOBAL_GEOM,
         scale=scale,
         maxPixels=1e13,
         tileScale=16,
     ).get('transition')
 
-    hist_dict = ee.Dictionary(ee.Algorithms.If(histogram, histogram, {}))
+    # Server-side conversion from fixedHistogram array format [[value, count], ...] to frequency dictionary format
+    def array_to_dict(arr):
+        arr = ee.Array(arr)
+        values = arr.slice(1, 0, 1).flatten().toList()
+        counts = arr.slice(1, 1, 2).flatten().toList()
+
+        indices = ee.List.sequence(0, values.length().subtract(1))
+
+        def make_feature(idx):
+            idx = ee.Number(idx)
+            val = ee.Number(values.get(idx))
+            cnt = ee.Number(counts.get(idx))
+            return ee.Feature(None, {
+                'key': val.format('%d'),
+                'count': cnt
+            })
+
+        fc = ee.FeatureCollection(indices.map(make_feature))
+        filtered_fc = fc.filter(ee.Filter.gt('count', 0))
+
+        keys = filtered_fc.aggregate_array('key')
+        vals = filtered_fc.aggregate_array('count')
+        return ee.Dictionary.fromLists(keys, vals)
+
+    hist_dict = ee.Dictionary(ee.Algorithms.If(
+        histogram,
+        array_to_dict(histogram),
+        {}
+    ))
+
     feature = ee.Feature(None, {'transition': hist_dict})
     fc = ee.FeatureCollection([feature])
 
