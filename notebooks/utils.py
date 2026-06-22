@@ -2998,6 +2998,7 @@ def calculate_aggregated_components_csv(
     
     # Unaccounted Extent (mat_u)
     mat_u = mat_ext + mat_x + mat_s - mat_sum
+    mat_u = pd.DataFrame(np.where(np.abs(mat_u.values) < 1e-9, 0.0, mat_u.values), index=all_classes, columns=all_classes)
     
     aggregated_matrices = {
         "sum": mat_sum,
@@ -6288,6 +6289,7 @@ def compute_and_save_components(
 
     # Unaccounted Extent (U = E + X + S - M)
     unacc_ext = df_e.values + alt_exc + alt_shift - df_s.values
+    unacc_ext = np.where(np.abs(unacc_ext) < 1e-9, 0.0, unacc_ext)
     np.fill_diagonal(unacc_ext, 0.0)
 
     # 3. Export to CSV
