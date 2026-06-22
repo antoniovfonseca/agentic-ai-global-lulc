@@ -3264,13 +3264,37 @@ def load_square_matrix(csv_path: str) -> pd.DataFrame:
     if is_raw:
         df = parse_gee_raw_csv(csv_path)
 
+        # Drop GEE metadata columns and rows if they exist
+        metadata_fields = {'system:index', '.geo'}
+        cols_to_drop = [c for c in df.columns if str(c) in metadata_fields]
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
+        rows_to_drop = [r for r in df.index if str(r) in metadata_fields]
+        if rows_to_drop:
+            df = df.drop(index=rows_to_drop)
+
     df.index = df.index.map(str)
     df.columns = df.columns.map(str)
 
     if list(df.index) != list(df.columns):
+            # Safe sorting logic that handles both class IDs and class names
+            name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
+            for k, v in GLANCE_METADATA.items():
+                if "rename" in v:
+                    name_to_id[v["rename"]] = k
+
+            def safe_sort_key(label):
+                label_str = str(label)
+                if label_str in name_to_id:
+                    return (0, name_to_id[label_str])
+                try:
+                    return (0, int(label_str))
+                except (ValueError, TypeError):
+                    return (1, label_str)
+
         labels = sorted(
             set(df.index).union(df.columns),
-            key=lambda x: int(x),
+                key=safe_sort_key,
         )
         df = df.reindex(
             index=labels,
