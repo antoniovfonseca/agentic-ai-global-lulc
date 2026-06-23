@@ -2911,79 +2911,37 @@ def export_unaccounted_extent_task_gee(
     """
     print(f"Preparing Unaccounted Extent GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Build an optimized global mask and mosaic each year exactly once
-    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+    # 1. Build the stack using the robust, standard helper already defined in utils.py
+    image_stack, band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
 
-    # Create an efficient dictionary referencing the pre-built, masked images
-    yearly_by_year = {y: img.updateMask(global_mask) for y, img in yearly_images}
+    # 2. Calculate the standard trajectory classification
+    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
 
-    start_img = yearly_by_year[year_list[0]]
-    end_img = yearly_by_year[year_list[-1]]
+    # 3. Mask is Trajectory 5 (which mathematically represents the Unaccounted Extent!)
+    unaccounted_mask = trajectory_image.eq(5)
 
-    # Identify pixels with overall extent change (start != end)
-    extent_change = start_img.neq(end_img)
+    # 4. Get start and end images
+    start_img = image_stack.select(band_names[0])
+    end_img = image_stack.select(band_names[-1])
 
-    # 2. Determine if there was a direct transition from start class to end class at any intermediate step
-    has_direct_transition = ee.Image(0)
-    for i in range(len(year_list) - 1):
-        y_curr = year_list[i]
-        y_next = year_list[i + 1]
-
-        img_curr = yearly_by_year[y_curr]
-        img_next = yearly_by_year[y_next]
-
-        is_direct = img_curr.eq(start_img).And(img_next.eq(end_img))
-        has_direct_transition = has_direct_transition.Or(is_direct)
-
-    # 3. Unaccounted mask: Overall change but NO direct transition at any step
-    unaccounted_mask = extent_change.And(has_direct_transition.Not())
-
+    # 5. Create the transition code image masked to Trajectory 5
     unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
 
-    # Use fixedHistogram for highly optimized static binning instead of dynamic frequencyHistogram
+    # 6. Reduce the region to a standard frequency histogram
     histogram = unaccounted_transition_code.reduceRegion(
-        reducer=ee.Reducer.fixedHistogram(100, 800, 700),
+        reducer=ee.Reducer.frequencyHistogram(),
         geometry=GLOBAL_GEOM,
         scale=scale,
         maxPixels=1e13,
         tileScale=16,
     ).get('transition')
 
-    # Server-side conversion from fixedHistogram array format [[value, count], ...] to frequency dictionary format
-    def array_to_dict(arr):
-        arr = ee.Array(arr)
-        values = arr.slice(1, 0, 1).project([0]).toList()
-        counts = arr.slice(1, 1, 2).project([0]).toList()
-
-        indices = ee.List.sequence(0, values.length().subtract(1))
-
-        def make_feature(idx):
-            idx = ee.Number(idx)
-            val = ee.Number(values.get(idx))
-            cnt = ee.Number(counts.get(idx))
-            return ee.Feature(None, {
-                'key': val.format('%d'),
-                'count': cnt
-            })
-
-        fc = ee.FeatureCollection(indices.map(make_feature))
-        filtered_fc = fc.filter(ee.Filter.gt('count', 0))
-
-        keys = filtered_fc.aggregate_array('key')
-        vals = filtered_fc.aggregate_array('count')
-        return ee.Dictionary.fromLists(keys, vals)
-
-    hist_dict = ee.Dictionary(ee.Algorithms.If(
-        histogram,
-        array_to_dict(histogram),
-        {}
-    ))
-
+    hist_dict = ee.Dictionary(ee.Algorithms.If(histogram, histogram, {}))
     feature = ee.Feature(None, {'transition': hist_dict})
     fc = ee.FeatureCollection([feature])
 
