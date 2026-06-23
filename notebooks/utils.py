@@ -36,15 +36,15 @@ NODATA_VALUE = 255
 GLANCE_COLLECTION_ID = "projects/GLANCE/DATASETS/V001"
 GLANCE_CLASS_BAND = "LC"
 
-# Current bounding box geometry (configured for Antarctica - AN)
+# Current bounding box geometry (configured for Africa - AF)
 GLOBAL_GEOM = ee.Geometry.Rectangle(
-    [-180.0, -90.0, 180.0, -60.0],
+    [-26.0, -35.0, 52.0, 38.0],
     "EPSG:4326",
     False,
 )
 
-# GLanCE official WKT projection system (configured for Antarctica - AN)
-GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AN - V01",
+# GLanCE official WKT projection system (configured for Africa - AF)
+GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AF - V01",
     GEOGCS["GCS_WGS_1984",
         DATUM["D_WGS_1984",
             SPHEROID["WGS_1984",6378137.0,298.257223563]],
@@ -53,13 +53,13 @@ GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AN - V01"
     PROJECTION["Lambert_Azimuthal_Equal_Area"],
     PARAMETER["false_easting",0.0],
     PARAMETER["false_northing",0.0],
-    PARAMETER["longitude_of_center",0],
-    PARAMETER["latitude_of_center",-90],
+    PARAMETER["longitude_of_center",20],
+    PARAMETER["latitude_of_center",5],
     UNIT["meter",1.0]]"""
 
-# GLanCE Grid parameters for custom clipping/exporting (configured for Antarctica - AN)
+# GLanCE Grid parameters for custom clipping/exporting (configured for Africa - AF)
 GLANCE_RESOLUTION = [30, 30]
-GLANCE_UL_XY = (-3662210.00, 5169375.0)
+GLANCE_UL_XY = (-5312270.00, 3707205.0)
 
 # 3. Class Metadata
 GLANCE_METADATA = {
