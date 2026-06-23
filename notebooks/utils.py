@@ -2957,8 +2957,8 @@ def export_unaccounted_extent_task_gee(
     # Server-side conversion from fixedHistogram array format [[value, count], ...] to frequency dictionary format
     def array_to_dict(arr):
         arr = ee.Array(arr)
-        values = arr.slice(1, 0, 1).flatten().toList()
-        counts = arr.slice(1, 1, 2).flatten().toList()
+        values = arr.slice(1, 0, 1).project([0]).toList()
+        counts = arr.slice(1, 1, 2).project([0]).toList()
 
         indices = ee.List.sequence(0, values.length().subtract(1))
 
