@@ -3,7 +3,7 @@ import re
 import glob
 
 import ee
-import geemap
+import geemap.foliumap as geemap
 import numpy as np
 import pandas as pd
 import rasterio
