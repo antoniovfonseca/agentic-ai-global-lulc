@@ -1908,6 +1908,8 @@ def export_trajectory_intervals_csv_gee(
     ee.batch.Task
         The submitted Earth Engine task object.
     """
+    print(f"Preparing Trajectory Contributions GEE Task for {year_list[0]}-{year_list[-1]}...")
+
     # 1. Build the stack (returns the image stack and band names)
     image_stack, band_names = build_glance_stack(
         year_list=year_list,
@@ -1923,45 +1925,45 @@ def export_trajectory_intervals_csv_gee(
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
     trajectory_image = trajectory_image.updateMask(valid_traj_mask)
 
-    # 4. Process each interval using GEE server-side mapping
+    # 4. Build a single multi-band image where each band represents an interval's masked trajectory
+    interval_images = []
+    for i in range(len(year_list) - 1):
+        y_start = year_list[i]
+        y_end = year_list[i + 1]
+        band_label = f"i_{y_start}_{y_end}"
+        
+        img1 = image_stack.select(band_names[i])
+        img2 = image_stack.select(band_names[i + 1])
+        change_mask = img1.neq(img2)
+        
+        traj_for_interval = trajectory_image.updateMask(change_mask).rename(band_label)
+        interval_images.append(traj_for_interval)
+        
+    combined_intervals_image = ee.Image(interval_images)
+
+    # 5. Run a SINGLE parallel reduction over all bands (massively faster!)
+    histograms = combined_intervals_image.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram(),
+        geometry=GLOBAL_GEOM,
+        scale=scale,
+        maxPixels=1e13,
+        tileScale=16,
+    )
+
+    # 6. Parse the single dictionary server-side into a FeatureCollection
     length = len(year_list)
     indices = ee.List.sequence(0, length - 2)
 
     def process_interval(idx):
         idx = ee.Number(idx)
-        b_names = ee.List(band_names)
-
-        # Get current and next band names
-        b1_name = ee.String(b_names.get(idx))
-        b2_name = ee.String(b_names.get(idx.add(1)))
-
-        # Select the images for the interval
-        img1 = image_stack.select(b1_name)
-        img2 = image_stack.select(b2_name)
-
-        # Identify changes between t and t+1
-        change_mask = img1.neq(img2)
-
-        # Mask the trajectory image with the changes in this specific interval
-        traj_for_interval = trajectory_image.updateMask(change_mask)
-
-        # Compute frequency histogram of trajectory classes (which gives PIXEL COUNTS)
-        hist = traj_for_interval.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
-            geometry=GLOBAL_GEOM,
-            scale=scale,
-            maxPixels=1e13,
-            tileScale=16,
-        ).get('trajectory')
-
-        # Handle potential null returns if there are no changes
-        hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
-
-        # Format interval label (e.g., "2001-2010")
         y_list = ee.List(year_list)
         y_start = ee.Number(y_list.get(idx)).format('%d')
         y_end = ee.Number(y_list.get(idx.add(1))).format('%d')
         interval_label = y_start.cat('-').cat(y_end)
+        band_label = ee.String("i_").cat(y_start).cat("_").cat(y_end)
+
+        # Get the histogram dictionary for this specific interval band
+        hist_dict = ee.Dictionary(histograms.get(band_label, {}))
 
         # Return as Feature (row for the CSV)
         return ee.Feature(None, {
@@ -1972,7 +1974,7 @@ def export_trajectory_intervals_csv_gee(
             '5': ee.Number(hist_dict.get('5', 0)),
         })
 
-    # 5. Map over the intervals
+    # 7. Map over the intervals
     features = ee.FeatureCollection(indices.map(process_interval))
 
     # 6. Prepare the CSV Export task
