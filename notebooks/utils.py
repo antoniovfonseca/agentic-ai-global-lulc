@@ -6382,6 +6382,9 @@ def reorder_matrices_by_net_change(
         _apply_order(df_ext_shift),
         _apply_order(df_alt_exc),
         _apply_order(df_alt_shift),
+    )
+
+
 def export_global_overall_change_frequency_csv_gee(
     year_list: list,
     drive_folder: str,
@@ -6440,5 +6443,3 @@ def export_global_overall_change_frequency_csv_gee(
     task.start()
     print(f"Task '{export_name}' submitted to Google Earth Engine.")
     return task
-
-    )
