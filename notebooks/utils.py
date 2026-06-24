@@ -1117,91 +1117,66 @@ def plot_number_of_changes_distribution(
         total_study_area_pixels += df_pixels[num_cols_pixels].sum().sum()
 
     # 2. Read and compile the Number_Change CSVs
-    change_files = glob.glob(
+    overall_files = glob.glob(
         os.path.join(
             input_dir,
-            "Number_Change_*.csv",
+            "Number_Change_Overall_*.csv",
         )
     )
-    if not change_files:
-        print(
-            "No Number_Change CSVs found.",
-        )
-        return
 
-    records = {}
-    for file_path in change_files:
-        df_temp = pd.read_csv(
-            file_path,
-        )
-        num_cols = [
-            c for c in df_temp.select_dtypes(
-                include=['number'],
-            ).columns
-            if 'system' not in c
-        ]
-        if num_cols:
-            records[
-                os.path.basename(file_path)
-            ] = df_temp[
-                num_cols
-            ].sum()
-
-    if not records:
-        print(
-            "No valid data found in Number_Change CSVs.",
-        )
-        return
-
-    df_compiled = pd.DataFrame.from_dict(
-        records,
-        orient='index',
-    ).fillna(
-        0,
-    )
-
-    # Fix column names to string integers
-    new_cols = {}
-    for c in df_compiled.columns:
-        try:
-            new_cols[
-                c
-            ] = str(
-                int(float(c))
-            )
-        except ValueError:
-            new_cols[
-                c
-            ] = str(
-                c,
-            )
-    df_compiled.rename(
-        columns=new_cols,
-        inplace=True,
-    )
-
-    # 3. Calculate the true number of unique pixels per change category
     unique_pixels_per_change = {}
 
-    for col_name in df_compiled.columns:
-        if not col_name.isdigit():
-            continue
+    if overall_files:
+        print(f"Loading overall change frequency directly from: {overall_files[0]}")
+        df_overall = pd.read_csv(overall_files[0])
+        
+        # Clean and filter GEE metadata columns
+        num_cols = [c for c in df_overall.columns if c.replace('.', '', 1).isdigit()]
+        df_compiled = df_overall[num_cols].fillna(0)
+        
+        # Rename float string keys to integers and sum potential duplicates
+        new_cols = {c: str(int(float(c))) for c in df_compiled.columns}
+        df_compiled.rename(columns=new_cols, inplace=True)
+        df_compiled = df_compiled.groupby(level=0, axis=1).sum()
+        
+        # For overall change files, values are already UNIQUE pixels! No division needed.
+        for col_name in df_compiled.columns:
+            unique_pixels_per_change[int(col_name)] = float(df_compiled[col_name].sum())
+            
+    else:
+        print("Dedicated overall change CSV not found. Falling back to compiling interval files...")
+        change_files = [
+            f for f in glob.glob(os.path.join(input_dir, "Number_Change_*.csv"))
+            if "Overall" not in os.path.basename(f)
+        ]
+        if not change_files:
+            print("No Number_Change CSVs found.")
+            return
 
-        n_changes = int(
-            col_name,
-        )
-        total_transitions = df_compiled[
-            col_name
-        ].sum()
+        records = {}
+        for file_path in change_files:
+            df_temp = pd.read_csv(file_path)
+            num_cols = [c for c in df_temp.select_dtypes(include=['number']).columns if 'system' not in c]
+            if num_cols:
+                records[os.path.basename(file_path)] = df_temp[num_cols].sum()
 
-        if n_changes > 0:
-            unique_pixels = total_transitions / n_changes
-        else:
-            unique_pixels = 0
+        if not records:
+            print("No valid data found in Number_Change CSVs.")
+            return
 
-        unique_pixels_per_change[
-            n_changes
-        ] = unique_pixels
+        df_compiled = pd.DataFrame.from_dict(records, orient='index').fillna(0)
+        new_cols = {c: str(int(float(c))) for c in df_compiled.columns}
+        df_compiled.rename(columns=new_cols, inplace=True)
+        df_compiled = df_compiled.groupby(level=0, axis=1).sum()
+
+        # Calculate unique pixels: division by n_changes is REQUIRED when reconstructing from intervals
+        for col_name in df_compiled.columns:
+            n_changes = int(col_name)
+            total_transitions = df_compiled[col_name].sum()
+            if n_changes > 0:
+                unique_pixels_per_change[n_changes] = total_transitions / n_changes
+            else:
+                unique_pixels_per_change[n_changes] = 0.0
 
     # 4. Calculate percentages relative to the entire study area
     percentages = {}
@@ -6388,4 +6363,63 @@ def reorder_matrices_by_net_change(
         _apply_order(df_ext_shift),
         _apply_order(df_alt_exc),
         _apply_order(df_alt_shift),
+def export_global_overall_change_frequency_csv_gee(
+    year_list: list,
+    drive_folder: str,
+    scale: int = 300,
+) -> ee.batch.Task:
+    """
+    Compute and export a single CSV representing the overall frequency of changes
+    (how many pixels changed 0, 1, 2, ... N times) across the entire timeline.
+    """
+    print(f"Preparing Overall Change Frequency GEE Task for {year_list[0]}-{year_list[-1]}...")
+
+    # 1. Build the stack using the robust, standard helper already defined in utils.py
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
+    )
+
+    # 2. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
+    stack_t = image_stack.select(band_names[:-1])
+    stack_t1 = image_stack.select(band_names[1:])
+
+    # 3. Calculate total changes across the entire timeline
+    total_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename('num_changes')
+
+    # 4. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
+    global_mask = image_stack.neq(NODATA_VALUE).reduce(ee.Reducer.min())
+    total_changes_masked = total_changes.updateMask(global_mask)
+
+    # 5. Compute the frequency histogram of the total changes for these pixels
+    histogram = total_changes_masked.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram(),
+        geometry=GLOBAL_GEOM,
+        scale=scale,
+        maxPixels=1e13,
+        tileScale=16,
+    ).get('num_changes')
+
+    # Handle possible nulls if no change occurred
+    hist_dict = ee.Dictionary(ee.Algorithms.If(histogram, histogram, {}))
+    feature = ee.Feature(None, hist_dict)
+    fc = ee.FeatureCollection([feature])
+
+    # 6. Configure and start the export task
+    start_year = year_list[0]
+    end_year = year_list[-1]
+    export_name = f"Number_Change_Overall_{start_year}_{end_year}"
+    task = ee.batch.Export.table.toDrive(
+        collection=fc,
+        description=export_name,
+        folder=drive_folder,
+        fileNamePrefix=export_name,
+        fileFormat="CSV",
+    )
+    task.start()
+    print(f"Task '{export_name}' submitted to Google Earth Engine.")
+    return task
+
     )
