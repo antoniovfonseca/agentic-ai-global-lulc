@@ -1100,22 +1100,60 @@ def plot_number_of_changes_distribution(
         print(f"Error: Could not calculate total study area from rasters or CSVs in {input_dir}.")
         return
 
-    # 2. Find and load the CSV containing changes per interval
-    csv_paths = [
-        os.path.join(input_dir, "tables", "number_change_per_interval.csv"),
-        os.path.join(input_dir, "number_change_per_interval.csv"),
-    ]
-    csv_path = None
-    for path in csv_paths:
-        if os.path.exists(path):
-            csv_path = path
-            break
+        # 2. Find and load the CSV containing changes per interval or overall changes
+        overall_csv_paths = sorted(
+            glob.glob(os.path.join(input_dir, "Number_Change_Overall_*.csv")) +
+            glob.glob(os.path.join(input_dir, "tables", "Number_Change_Overall_*.csv"))
+        )
 
-    if not csv_path:
-        print(f"Error: Could not find number_change_per_interval.csv in {input_dir}.")
-        return
+        df = None
+        is_overall = False
 
-    df = pd.read_csv(csv_path, index_col=0)
+        if overall_csv_paths:
+            csv_path = overall_csv_paths[0]
+            df = pd.read_csv(csv_path)
+            is_overall = True
+        else:
+            # Try direct file first
+            csv_paths = [
+                os.path.join(input_dir, "tables", "number_change_per_interval.csv"),
+                os.path.join(input_dir, "number_change_per_interval.csv"),
+            ]
+            csv_path = None
+            for path in csv_paths:
+                if os.path.exists(path):
+                    csv_path = path
+                    break
+
+            if csv_path:
+                df = pd.read_csv(csv_path, index_col=0)
+            else:
+                # Compile on-the-fly from Number_Change_*.csv interval files
+                interval_files = sorted([
+                    f for f in glob.glob(os.path.join(input_dir, "Number_Change_*.csv")) +
+                               glob.glob(os.path.join(input_dir, "tables", "Number_Change_*.csv"))
+                    if "Overall" not in os.path.basename(f)
+                ])
+
+                if interval_files:
+                    records = {}
+                    for file_path in interval_files:
+                        basename = os.path.basename(file_path)
+                        interval_str = basename.replace("Number_Change_", "").replace(".csv", "")
+                        parts = interval_str.split("_")
+                        label = f"{parts[0]}-{parts[1]}" if len(parts) == 2 else interval_str
+
+                        df_temp = pd.read_csv(file_path)
+                        num_cols = [c for c in df_temp.select_dtypes(include=['number']).columns if 'system' not in c]
+                        if num_cols:
+                            records[label] = df_temp[num_cols].sum()
+
+                    if records:
+                        df = pd.DataFrame.from_dict(records, orient='index').fillna(0)
+
+        if df is None or df.empty:
+            print(f"Error: Could not find number_change_per_interval.csv, Number_Change_Overall_*.csv, or interval files in {input_dir}.")
+            return
 
     # Fix column names to string integers and merge duplicates
     new_cols = {}
@@ -1137,10 +1175,13 @@ def plot_number_of_changes_distribution(
             continue
         total_transitions = df[col_name].sum()
 
-        if n_changes > 0:
-            unique_pixels = total_transitions / n_changes
+            if is_overall:
+                unique_pixels = total_transitions
         else:
-            unique_pixels = 0
+                if n_changes > 0:
+                    unique_pixels = total_transitions / n_changes
+                else:
+                    unique_pixels = 0
 
         unique_pixels_per_change[n_changes] = unique_pixels
 
