@@ -1181,6 +1181,8 @@ def plot_number_of_changes_distribution(
     # 4. Calculate percentages relative to the entire study area
     percentages = {}
     for n_changes, count in unique_pixels_per_change.items():
+        if n_changes == 0:
+            continue  # Exclude stable pixels (0 changes) from being plotted
         if total_study_area_pixels > 0:
             pct = (count / total_study_area_pixels) * 100.0
         else:
@@ -2371,7 +2373,24 @@ def plot_trajectory_distribution(
 
     # 3. Calculate percentages
     if total_pixels is None:
-        total_pixels = sum(data_counts.values())
+        # Align the denominator with Pixel_Counts_LULC to represent the whole study area
+        pixel_count_files = glob.glob(os.path.join(input_dir, "Pixel_Counts_LULC_*.csv"))
+        if pixel_count_files:
+            first_file = pixel_count_files[0]
+            match = re.search(r"(\d{4})", os.path.basename(first_file))
+            target_year = match.group(1) if match else None
+            
+            year_files = [f for f in pixel_count_files if target_year and target_year in os.path.basename(f)]
+            if not year_files:
+                year_files = [first_file]
+
+            total_pixels = 0.0
+            for f in year_files:
+                df_pixels = pd.read_csv(f)
+                num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c]
+                total_pixels += df_pixels[num_cols_pixels].sum().sum()
+        else:
+            total_pixels = sum(data_counts.values())
 
     percentages = {
         i: float((data_counts.get(i, 0) / total_pixels) * 100.0) if total_pixels > 0 else 0.0
