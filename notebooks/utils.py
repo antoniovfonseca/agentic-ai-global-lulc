@@ -3501,7 +3501,7 @@ def _unit_label(suffix: str, base_label: str = "Pixels") -> str:
     }
     return mapping.get(suffix, f"{base_label} ({suffix})")
 
-def _unit_formatter(factor: float, decimals: int = 1):
+def _unit_formatter(factor: float, decimals: int = 1, suffix: str = ""):
     """
     Build a tick formatter that scales values by a factor.
 
@@ -3511,13 +3511,15 @@ def _unit_formatter(factor: float, decimals: int = 1):
         The factor to divide the values by (e.g., 1000 or 1000000).
     decimals : int, optional
         The number of decimal places to include (default is 1).
+    suffix : str, optional
+        The string suffix to append (default is "").
 
     Returns
     -------
     matplotlib.ticker.FuncFormatter
         A formatter function for the plot ticks.
     """
-    fmt = f"{{:.{decimals}f}}"
+    fmt = f"{{:.{decimals}f}}{suffix}"
     def _fmt(x: float, pos: int) -> str:
         return fmt.format(x / factor)
     return mticker.FuncFormatter(_fmt)
