@@ -5592,8 +5592,8 @@ def calculate_trajectory_gee(
     # 2. Check if the start class equals the end class
     start_equals_end = start_img.eq(end_img)
 
-    # 3. Verify if all intermediate values match the start value using a flat, fast maximum difference reducer
-    all_match_start = image_stack.subtract(start_img).abs().reduce(ee.Reducer.max()).eq(0)
+    # 3. Verify if all intermediate values match the start value (1 if all bands equal start_img)
+    all_match_start = image_stack.eq(start_img).reduce(ee.Reducer.min())
 
     # 4. Assign Trajectory 1 for completely stable pixels
     traj_1 = start_equals_end.And(all_match_start).multiply(1)
@@ -5604,27 +5604,13 @@ def calculate_trajectory_gee(
     # 6. Identify pixels with extent change
     extent_change = start_equals_end.Not()
 
-    # 7. Pre-compute flat lists of transitions and changes across all consecutive pairs
-    diff_images = []
-    direct_trans_images = []
-    length = len(band_names)
+    # 7. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
+    stack_t = image_stack.select(band_names[:-1])
+    stack_t1 = image_stack.select(band_names[1:])
 
-    for i in range(length - 1):
-        current_band = image_stack.select(band_names[i])
-        next_band = image_stack.select(band_names[i + 1])
-
-        # 9. Check for a direct transition from start to end class
-        is_direct = current_band.eq(start_img).And(next_band.eq(end_img)).rename('direct')
-        direct_trans_images.append(is_direct)
-
-        # 10. Increment path changes when the class changes between steps
-        is_change = current_band.neq(next_band).rename('change')
-        diff_images.append(is_change)
-
-    # 8. Reduce flat lists using optimized, native ImageCollection reductions
-    # This completely eliminates recursive nested .Or() and .add() calls
-    has_direct_transition = ee.ImageCollection.fromImages(direct_trans_images).max()
-    path_changes = ee.ImageCollection.fromImages(diff_images).sum()
+    # 8. Check for a direct transition and path changes using native multi-band operations
+    has_direct_transition = stack_t.eq(start_img).And(stack_t1.eq(end_img)).reduce(ee.Reducer.max())
+    path_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum())
 
     # 11. Assign Trajectory 5 for extent change without direct transition
     traj_5 = extent_change.And(has_direct_transition.Not()).multiply(5)
