@@ -2190,29 +2190,30 @@ def export_trajectory_overall_csv_gee(
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
     trajectory_image = trajectory_image.updateMask(valid_traj_mask)
 
-    # 4. Compute frequency histogram of trajectory classes
+    # 4. Use fixedHistogram for high performance static binning instead of dynamic frequencyHistogram
     hist = trajectory_image.reduceRegion(
-        reducer=ee.Reducer.frequencyHistogram(),
+        reducer=ee.Reducer.fixedHistogram(2, 6, 4),
         geometry=GLOBAL_GEOM,
         scale=scale,
         maxPixels=1e13,
         tileScale=16,
     ).get('trajectory')
 
-    # Handle potential null returns if there are no changes
-    hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
-
-    # 5. Format into a Feature
     y_start = str(year_list[0])
     y_end = str(year_list[-1])
     period_label = f"{y_start}-{y_end}"
 
+    # Convert fixedHistogram array to standard count values server-side
+    hist_array = ee.Array(ee.Algorithms.If(hist, hist, ee.Array([[2, 0], [3, 0], [4, 0], [5, 0]])))
+    counts = hist_array.slice(1, 1, 2).project([0]).toList()
+
+    # 5. Format into a Feature
     feature = ee.Feature(None, {
         'Period': period_label,
-        '2': ee.Number(hist_dict.get('2', 0)),
-        '3': ee.Number(hist_dict.get('3', 0)),
-        '4': ee.Number(hist_dict.get('4', 0)),
-        '5': ee.Number(hist_dict.get('5', 0)),
+        '2': ee.Number(counts.get(0)),
+        '3': ee.Number(counts.get(1)),
+        '4': ee.Number(counts.get(2)),
+        '5': ee.Number(counts.get(3)),
     })
 
     fc = ee.FeatureCollection([feature])
@@ -5591,10 +5592,8 @@ def calculate_trajectory_gee(
     # 2. Check if the start class equals the end class
     start_equals_end = start_img.eq(end_img)
 
-    # 3. Verify if all intermediate values match the start value (Optimized with native element-wise logical And)
-    all_match_start = image_stack.select(band_names[0]).eq(start_img)
-    for b in band_names[1:]:
-        all_match_start = all_match_start.And(image_stack.select(b).eq(start_img))
+    # 3. Verify if all intermediate values match the start value using a flat, fast maximum difference reducer
+    all_match_start = image_stack.subtract(start_img).abs().reduce(ee.Reducer.max()).eq(0)
 
     # 4. Assign Trajectory 1 for completely stable pixels
     traj_1 = start_equals_end.And(all_match_start).multiply(1)
