@@ -5627,8 +5627,9 @@ def calculate_trajectory_gee(
     # 12. Combine all trajectory maps into a single output image
     trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
 
-    # 13. Apply the global validity mask using start and end years to keep the graph flat and fast
-    global_mask = start_img.neq(nodata_val).And(end_img.neq(nodata_val))
+    # 13. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
+    # Using a flat reducer on the clean stack to avoid graph recursion timeouts
+    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
     trajectory_image = trajectory_image.updateMask(global_mask)
 
     return trajectory_image.rename('trajectory')
