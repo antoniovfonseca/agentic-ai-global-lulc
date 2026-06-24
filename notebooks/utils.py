@@ -5569,6 +5569,7 @@ MATRIX_META = {
 def calculate_trajectory_gee(
     image_stack: ee.Image,
     band_names: list,
+    nodata_val: int = NODATA_VALUE,
 ) -> ee.Image:
     """
     Classify a single pixel trajectory into five categories based on mathematical logic using GEE.
@@ -5579,6 +5580,8 @@ def calculate_trajectory_gee(
         An ee.Image where each band represents a chronological time step.
     band_names : list
         A list of strings representing the ordered band names in the stack.
+    nodata_val : int, optional
+        NoData value to be masked out at the end, by default NODATA_VALUE (255).
 
     Returns
     -------
@@ -5624,6 +5627,10 @@ def calculate_trajectory_gee(
     # 14. Combine all trajectory maps into a single output image
     trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
 
+    # 15. Apply the global validity mask once at the very end to keep the computation graph flat and fast
+    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    trajectory_image = trajectory_image.updateMask(global_mask)
+
     return trajectory_image.rename('trajectory')
 
 def build_glance_stack(
@@ -5634,7 +5641,7 @@ def build_glance_stack(
 ) -> tuple:
     """
     Build an Earth Engine image stack from the specified collection,
-    masking out NoData values.
+    without pre-applying complex global masks to keep the computation graph clean.
 
     Parameters
     ----------
@@ -5652,21 +5659,17 @@ def build_glance_stack(
     tuple
         A tuple containing the ee.Image stack and the list of band names.
     """
-    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
-        year_list=year_list,
-        collection_id=collection_id,
-        band_name=band_name,
-        nodata_val=nodata_val,
-    )
-
+    collection = ee.ImageCollection(collection_id).select(band_name)
     images = []
     b_names = []
 
-    for year, img in yearly_images:
+    for year in year_list:
         b_name = f"y{year}"
         b_names.append(b_name)
+        
+        img = collection.filter(ee.Filter.calendarRange(year, year, "year")).mosaic()
         images.append(
-            img.updateMask(global_mask).rename(b_name)
+            img.rename(b_name)
         )
 
     stack = ee.Image(images)
