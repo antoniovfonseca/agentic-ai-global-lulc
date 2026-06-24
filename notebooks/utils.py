@@ -5614,11 +5614,11 @@ def calculate_trajectory_gee(
         next_band = image_stack.select(band_names[i + 1])
 
         # 9. Check for a direct transition from start to end class
-        is_direct = current_band.eq(start_img).And(next_band.eq(end_img))
+        is_direct = current_band.eq(start_img).And(next_band.eq(end_img)).rename('direct')
         direct_trans_images.append(is_direct)
 
         # 10. Increment path changes when the class changes between steps
-        is_change = current_band.neq(next_band)
+        is_change = current_band.neq(next_band).rename('change')
         diff_images.append(is_change)
 
     # 8. Reduce flat lists using optimized, native ImageCollection reductions
