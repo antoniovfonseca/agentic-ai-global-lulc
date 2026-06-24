@@ -1066,123 +1066,52 @@ def plot_global_change_frequency_bar_chart(
 # ---------------------------------------------------------------------------
 
 def plot_number_of_changes_distribution(
-    input_dir: str,
-    output_dir: str,
+    df: pd.DataFrame,
+    image_paths: list[str],
+    nodata_val: int,
+    output_path: str,
 ) -> None:
     """
     Generate a single stacked bar chart of the number of changes distribution.
 
     This function calculates the percentage of unique pixels that underwent
-    1, 2, 3, or N total changes relative to the ENTIRE valid study area,
-    using GEE-exported CSVs.
-
-    Parameters
-    ----------
-    input_dir : str
-        Directory containing both 'Pixel_Counts_LULC_*.csv' (for total area)
-        and 'Number_Change_*.csv' files.
-    output_dir : str
-        Directory to save the resulting figure.
-
-    Returns
-    -------
-    None
+    1, 2, 3, or N total changes relative to the ENTIRE valid study area.
     """
-    # 1. Read the pixel counts to find the TRUE total valid study area
-    pixel_count_files = glob.glob(
-        os.path.join(
-            input_dir,
-            "Pixel_Counts_LULC_*.csv",
+    # 1. Read the first raster to find the TRUE total valid study area
+    with rasterio.open(
+        image_paths[0],
+    ) as src:
+        first_raster = src.read(
+            1,
         )
-    )
-    if not pixel_count_files:
-        print(
-            "No Pixel_Counts_LULC CSVs found to calculate total study area.",
-        )
-        return
 
-    # Calculate total study area by summing all quadrant files for a specific year
-    first_file = pixel_count_files[0]
-    match = re.search(r"(\d{4})", os.path.basename(first_file))
-    target_year = match.group(1) if match else None
-    
-    year_files = [f for f in pixel_count_files if target_year and target_year in os.path.basename(f)]
-    if not year_files:
-        year_files = [first_file]
-
-    total_study_area_pixels = 0.0
-    for f in year_files:
-        df_pixels = pd.read_csv(f)
-        num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c]
-        total_study_area_pixels += df_pixels[num_cols_pixels].sum().sum()
-
-    # 2. Read and compile the Number_Change CSVs
-    overall_files = glob.glob(
-        os.path.join(
-            input_dir,
-            "Number_Change_Overall_*.csv",
-        )
+    total_study_area_pixels = np.sum(
+        first_raster != nodata_val,
     )
 
+    # 2. Calculate the true number of unique pixels per change category
     unique_pixels_per_change = {}
 
-    if overall_files:
-        print(f"Loading overall change frequency directly from: {overall_files[0]}")
-        df_overall = pd.read_csv(overall_files[0])
-        
-        # Clean and filter GEE metadata columns
-        num_cols = [c for c in df_overall.columns if c.replace('.', '', 1).isdigit()]
-        df_compiled = df_overall[num_cols].fillna(0)
-        
-        # Rename float string keys to integers and sum potential duplicates
-        new_cols = {c: str(int(float(c))) for c in df_compiled.columns}
-        df_compiled.rename(columns=new_cols, inplace=True)
-        df_compiled = df_compiled.groupby(level=0, axis=1).sum()
-        
-        # For overall change files, values are already UNIQUE pixels! No division needed.
-        for col_name in df_compiled.columns:
-            unique_pixels_per_change[int(col_name)] = float(df_compiled[col_name].sum())
-            
-    else:
-        print("Dedicated overall change CSV not found. Falling back to compiling interval files...")
-        change_files = [
-            f for f in glob.glob(os.path.join(input_dir, "Number_Change_*.csv"))
-            if "Overall" not in os.path.basename(f)
-        ]
-        if not change_files:
-            print("No Number_Change CSVs found.")
-            return
+    for col_name in df.columns:
+        n_changes = int(
+            col_name,
+        )
+        total_transitions = df[
+            col_name
+        ].sum()
 
-        records = {}
-        for file_path in change_files:
-            df_temp = pd.read_csv(file_path)
-            num_cols = [c for c in df_temp.select_dtypes(include=['number']).columns if 'system' not in c]
-            if num_cols:
-                records[os.path.basename(file_path)] = df_temp[num_cols].sum()
+        if n_changes > 0:
+            unique_pixels = total_transitions / n_changes
+        else:
+            unique_pixels = 0
 
-        if not records:
-            print("No valid data found in Number_Change CSVs.")
-            return
+        unique_pixels_per_change[
+            n_changes
+        ] = unique_pixels
 
-        df_compiled = pd.DataFrame.from_dict(records, orient='index').fillna(0)
-        new_cols = {c: str(int(float(c))) for c in df_compiled.columns}
-        df_compiled.rename(columns=new_cols, inplace=True)
-        df_compiled = df_compiled.groupby(level=0, axis=1).sum()
-
-        # Calculate unique pixels: division by n_changes is REQUIRED when reconstructing from intervals
-        for col_name in df_compiled.columns:
-            n_changes = int(col_name)
-            total_transitions = df_compiled[col_name].sum()
-            if n_changes > 0:
-                unique_pixels_per_change[n_changes] = total_transitions / n_changes
-            else:
-                unique_pixels_per_change[n_changes] = 0.0
-
-    # 4. Calculate percentages relative to the entire study area
+    # 3. Calculate percentages relative to the entire study area
     percentages = {}
     for n_changes, count in unique_pixels_per_change.items():
-        if n_changes == 0:
-            continue  # Exclude stable pixels (0 changes) from being plotted
         if total_study_area_pixels > 0:
             pct = (count / total_study_area_pixels) * 100.0
         else:
@@ -1192,7 +1121,7 @@ def plot_number_of_changes_distribution(
             n_changes
         ] = pct
 
-    # 5. Setup Colors
+    # 4. Setup Colors
     active_changes = [
         k for k, v in percentages.items()
         if v > 0
@@ -1218,9 +1147,7 @@ def plot_number_of_changes_distribution(
             i / (n_colors - 1)
         )
         if n_colors > 1
-        else cmap(
-            0.5,
-        )
+        else cmap(0.5)
         for i, n in enumerate(
             sorted(
                 active_changes,
@@ -1228,7 +1155,7 @@ def plot_number_of_changes_distribution(
         )
     }
 
-    # 6. Create the Figure
+    # 5. Create the Figure
     fig, ax = plt.subplots(
         figsize=(
             6,
@@ -1254,7 +1181,7 @@ def plot_number_of_changes_distribution(
             )
             bottom += val
 
-    # 7. Formatting the Axes
+    # 6. Formatting the Axes
     ax.set_ylabel(
         "Change (% of study area)",
         fontsize=16,
@@ -1314,7 +1241,7 @@ def plot_number_of_changes_distribution(
         ),
     )
 
-    # 8. Legend
+    # 7. Legend
     legend_elements = []
 
     for n in sorted(active_changes):
@@ -1343,12 +1270,12 @@ def plot_number_of_changes_distribution(
         left=0.15,
         right=0.75,
         bottom=0.1,
-        top=0.9,
+        top=0.9
     )
 
-    # 9. Save and show the figure
+    # 8. Save and show the figure
     charts_dir = os.path.join(
-        output_dir,
+        output_path,
         "charts",
     )
     os.makedirs(
