@@ -1076,114 +1076,104 @@ def plot_number_of_changes_distribution(
     This function calculates the percentage of unique pixels that underwent
     1, 2, 3, or N total changes relative to the ENTIRE valid study area.
     """
-    # 1. Dynamically locate raster files to find the TRUE total valid study area
-    image_paths = sorted(
-        glob.glob(os.path.join(input_dir, "*.tif")) +
-        glob.glob(os.path.join(input_dir, "rasters", "*.tif")) +
-        glob.glob(os.path.join(input_dir, "masked", "*.tif"))
-    )
+    # 1. Locate the Number of Changes Raster in the directory structure
+    raster_patterns = [
+        os.path.join(input_dir, "rasters", "Number_of_Changes_Raster_*.tif"),
+        os.path.join(input_dir, "Number_of_Changes_Raster_*.tif"),
+        os.path.join(output_dir, "rasters", "Number_of_Changes_Raster_*.tif"),
+        os.path.join(output_dir, "Number_of_Changes_Raster_*.tif"),
+    ]
+    
+    raster_path = None
+    for pattern in raster_patterns:
+        matches = glob.glob(pattern, recursive=True)
+        if matches:
+            raster_path = matches[0]
+            break
+            
+    if not raster_path:
+        # Fallback broader search
+        matches = glob.glob(os.path.join(input_dir, "**/*Number_of_Changes_Raster*.tif"), recursive=True)
+        if matches:
+            raster_path = matches[0]
 
-    total_study_area_pixels = 0.0
-    if image_paths:
-        with rasterio.open(image_paths[0]) as src:
-            first_raster = src.read(1)
-        total_study_area_pixels = np.sum(first_raster != nodata_val)
-    else:
-        # Fallback to Pixel_Counts_LULC CSVs if no raster is found in the path
-        pixel_count_files = glob.glob(os.path.join(input_dir, "Pixel_Counts_LULC_*.csv"))
-        if pixel_count_files:
-            df_pixels = pd.read_csv(pixel_count_files[0])
-            num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c]
-            total_study_area_pixels = df_pixels[num_cols_pixels].sum().sum()
-
-    if total_study_area_pixels == 0:
-        print(f"Error: Could not calculate total study area from rasters or CSVs in {input_dir}.")
+    if not raster_path:
+        print(f"Error: Could not find Number_of_Changes_Raster_*.tif in {input_dir} or {output_dir}.")
         return
 
-        # 2. Find and load the CSV containing changes per interval or overall changes
-        overall_csv_paths = sorted(
-            glob.glob(os.path.join(input_dir, "Number_Change_Overall_*.csv")) +
-            glob.glob(os.path.join(input_dir, "tables", "Number_Change_Overall_*.csv"))
+    print(f"Loading overall change frequency directly from raster: {raster_path}")
+
+    # 2. Read raster and compute unique counts
+    with rasterio.open(raster_path) as src:
+        change_data = src.read(1)
+        nodata = src.nodata if src.nodata is not None else nodata_val
+
+    masked_change = np.ma.masked_where(
+        change_data == nodata,
+        change_data,
+    )
+
+    unique_vals, counts = np.unique(
+        masked_change.compressed(),
+        return_counts=True,
+    )
+
+    data_counts = dict(
+        zip(
+            unique_vals,
+            counts,
+        ),
+    )
+
+    total_study_area_pixels = sum(data_counts.values())
+
+    if total_study_area_pixels == 0:
+        print("Error: No valid study area pixels found in the raster.")
+        return
+
+    # 3. Calculate percentages relative to the entire study area (excluding 0)
+    percentages = {}
+    for n_changes, count in data_counts.items():
+        n_changes_int = int(n_changes)
+        if n_changes_int == 0:
+            continue  # Exclude stable pixels (0 changes) from being plotted
+        
+        pct = (count / total_study_area_pixels) * 100.0
+        percentages[n_changes_int] = pct
+
+    # 4. Setup Colors
+    active_changes = [
+        k for k, v in percentages.items()
+        if v > 0
+    ]
+
+    if not active_changes:
+        active_changes = list(
+            percentages.keys(),
         )
 
-        df = None
-        is_overall = False
+    n_colors = len(
+        active_changes,
+    )
+    cmap = plt.cm.viridis_r
 
-        if overall_csv_paths:
-            csv_path = overall_csv_paths[0]
-            df = pd.read_csv(csv_path)
-            is_overall = True
-        else:
-            # Try direct file first
-            csv_paths = [
-                os.path.join(input_dir, "tables", "number_change_per_interval.csv"),
-                os.path.join(input_dir, "number_change_per_interval.csv"),
-            ]
-            csv_path = None
-            for path in csv_paths:
-                if os.path.exists(path):
-                    csv_path = path
-                    break
+    sorted_changes_desc = sorted(
+        active_changes,
+        reverse=True,
+    )
 
-            if csv_path:
-                df = pd.read_csv(csv_path, index_col=0)
-            else:
-                # Compile on-the-fly from Number_Change_*.csv interval files
-                interval_files = sorted([
-                    f for f in glob.glob(os.path.join(input_dir, "Number_Change_*.csv")) +
-                               glob.glob(os.path.join(input_dir, "tables", "Number_Change_*.csv"))
-                    if "Overall" not in os.path.basename(f)
-                ])
-
-                if interval_files:
-                    records = {}
-                    for file_path in interval_files:
-                        basename = os.path.basename(file_path)
-                        interval_str = basename.replace("Number_Change_", "").replace(".csv", "")
-                        parts = interval_str.split("_")
-                        label = f"{parts[0]}-{parts[1]}" if len(parts) == 2 else interval_str
-
-                        df_temp = pd.read_csv(file_path)
-                        num_cols = [c for c in df_temp.select_dtypes(include=['number']).columns if 'system' not in c]
-                        if num_cols:
-                            records[label] = df_temp[num_cols].sum()
-
-                    if records:
-                        df = pd.DataFrame.from_dict(records, orient='index').fillna(0)
-
-        if df is None or df.empty:
-            print(f"Error: Could not find number_change_per_interval.csv, Number_Change_Overall_*.csv, or interval files in {input_dir}.")
-            return
-
-    # Fix column names to string integers and merge duplicates
-    new_cols = {}
-    for c in df.columns:
-        try:
-            new_cols[c] = str(int(float(c)))
-        except ValueError:
-            new_cols[c] = str(c)
-    df.rename(columns=new_cols, inplace=True)
-    df = df.groupby(level=0, axis=1).sum()
-
-    # 3. Calculate the true number of unique pixels per change category
-    unique_pixels_per_change = {}
-
-    for col_name in df.columns:
-        try:
-            n_changes = int(col_name)
-        except ValueError:
-            continue
-        total_transitions = df[col_name].sum()
-
-            if is_overall:
-                unique_pixels = total_transitions
-        else:
-                if n_changes > 0:
-                    unique_pixels = total_transitions / n_changes
-                else:
-                    unique_pixels = 0
-
-        unique_pixels_per_change[n_changes] = unique_pixels
+    colors = {
+        n: cmap(
+            i / (n_colors - 1)
+        )
+        if n_colors > 1
+        else cmap(0.5)
+        for i, n in enumerate(
+            sorted(
+                active_changes,
+            )
+        )
+    }
 
     # 3. Calculate percentages relative to the entire study area
     percentages = {}
