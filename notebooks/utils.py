@@ -5595,40 +5595,40 @@ def calculate_trajectory_gee(
     # 2. Check if the start class equals the end class
     start_equals_end = start_img.eq(end_img)
 
-    # 3. Verify if all intermediate values match the start value (1 if all bands equal start_img)
-    all_match_start = image_stack.eq(start_img).reduce(ee.Reducer.min())
-
-    # 4. Assign Trajectory 1 for completely stable pixels
-    traj_1 = start_equals_end.And(all_match_start).multiply(1)
-
-    # 5. Assign Trajectory 2 for stable extent with alternation
-    traj_2 = start_equals_end.And(all_match_start.Not()).multiply(2)
-
-    # 6. Identify pixels with extent change
-    extent_change = start_equals_end.Not()
-
-    # 7. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
+    # 3. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
     stack_t = image_stack.select(band_names[:-1])
     stack_t1 = image_stack.select(band_names[1:])
 
-    # 8. Check for a direct transition and path changes using native multi-band operations
+    # 4. Check for a direct transition and path changes using native multi-band operations
     has_direct_transition = stack_t.eq(start_img).And(stack_t1.eq(end_img)).reduce(ee.Reducer.max())
     path_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum())
 
-    # 11. Assign Trajectory 5 for extent change without direct transition
+    # 5. Deduce all_match_start mathematically from path_changes (0 changes means completely stable)
+    all_match_start = path_changes.eq(0)
+
+    # 6. Assign Trajectory 1 for completely stable pixels
+    traj_1 = start_equals_end.And(all_match_start).multiply(1)
+
+    # 7. Assign Trajectory 2 for stable extent with alternation
+    traj_2 = start_equals_end.And(all_match_start.Not()).multiply(2)
+
+    # 8. Identify pixels with extent change
+    extent_change = start_equals_end.Not()
+
+    # 9. Assign Trajectory 5 for extent change without direct transition
     traj_5 = extent_change.And(has_direct_transition.Not()).multiply(5)
 
-    # 12. Assign Trajectory 3 for extent change without alternation
+    # 10. Assign Trajectory 3 for extent change without alternation
     traj_3 = extent_change.And(has_direct_transition).And(path_changes.eq(1)).multiply(3)
 
-    # 13. Assign Trajectory 4 for extent change with alternation
+    # 11. Assign Trajectory 4 for extent change with alternation
     traj_4 = extent_change.And(has_direct_transition).And(path_changes.gt(1)).multiply(4)
 
-    # 14. Combine all trajectory maps into a single output image
+    # 12. Combine all trajectory maps into a single output image
     trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
 
-    # 15. Apply the global validity mask once at the very end to keep the computation graph flat and fast
-    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    # 13. Apply the global validity mask using start and end years to keep the graph flat and fast
+    global_mask = start_img.neq(nodata_val).And(end_img.neq(nodata_val))
     trajectory_image = trajectory_image.updateMask(global_mask)
 
     return trajectory_image.rename('trajectory')
