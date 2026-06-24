@@ -2105,138 +2105,140 @@ def export_trajectory_overall_csv_gee(
     return task
 
 
-def plot_trajectory_contributions(
-    df: pd.DataFrame,
-    output_path: str,
+# ---------------------------------------------------------------------------
+# 5.5 PLOT TRAJECTORY OVERALL
+# ---------------------------------------------------------------------------
+def plot_trajectory_distribution(
+    input_dir: str,
+    csv_filename: str,
+    total_pixels: float = None,
 ) -> None:
     """
-    Create a stacked bar chart for trajectory contributions per interval.
+    Generate and save a stacked bar chart of trajectory class distributions.
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame with intervals as index and trajectory IDs (2, 3, 4, 5) as columns.
-    output_path : str
-        Path to output directory for saving figure.
+    Reads trajectory pixel counts from an exported GEE CSV file and
+    calculates percentages. If total_pixels is provided, it calculates
+    the percentage relative to the entire study area.
     """
-    # 0. Ensure columns are integers to match logic
-    df = df.copy()
-    df.columns = df.columns.astype(int)
+    csv_path = os.path.join(input_dir, csv_filename)
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
-    # 1. Calculate the maximum value to determine scale factor
-    max_val = df.sum(axis=1).max()
+    df = pd.read_csv(csv_path)
 
-    if max_val >= 1_000_000_000_000:
-        scale_factor = 1_000_000_000_000
-        y_label = "Change (trillion pixels)"
-    elif max_val >= 1_000_000_000:
-        scale_factor = 1_000_000_000
-        y_label = "Change (billion pixels)"
-    elif max_val >= 1_000_000:
-        scale_factor = 1_000_000
-        y_label = "Change (million pixels)"
-    elif max_val >= 1_000:
-        scale_factor = 1_000
-        y_label = "Change (thousand pixels)"
-    else:
-        scale_factor = 1
-        y_label = "Change (pixels)"
+    # Extract counts for trajectory classes 2, 3, 4, 5
+    data_counts = {}
+    for col in ['2', '3', '4', '5']:
+        if col in df.columns:
+            data_counts[int(col)] = df[col].sum()
+        else:
+            data_counts[int(col)] = 0.0
 
-    # Apply scaling
-    df_scaled = df / scale_factor
+    # Calculate percentages
+    if total_pixels is None:
+        # Align the denominator with Pixel_Counts_LULC to represent the whole study area
+        pixel_count_files = glob.glob(os.path.join(input_dir, "Pixel_Counts_LULC_*.csv"))
+        if pixel_count_files:
+            first_file = pixel_count_files[0]
+            match = re.search(r"(\d{4})", os.path.basename(first_file))
+            target_year = match.group(1) if match else None
 
-    # 2. Define colors and stacking order
-    colors = {
-        2: "#990033",
-        3: "#FDE725",
-        4: "#ff9900",
-        5: "#000066",
+            year_files = [f for f in pixel_count_files if target_year and target_year in os.path.basename(f)]
+            if not year_files:
+                year_files = [first_file]
+
+            total_pixels = 0.0
+            for f in year_files:
+                df_pixels = pd.read_csv(f)
+                num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c]
+                total_pixels += df_pixels[num_cols_pixels].sum().sum()
+        else:
+            total_pixels = sum(data_counts.values())
+
+    percentages = {
+        i: float((data_counts.get(i, 0) / total_pixels) * 100.0) if total_pixels > 0 else 0.0
+        for i in [2, 3, 4, 5]
     }
 
-    # Stacking order: 5 (bottom), 4, 3, 2 (top)
-    stack_order = [5, 4, 3, 2]
+    ordered_trajs = [5, 4, 3, 2]
+    colors = {
+        5: "#000066",
+        4: "#ff9900",
+        3: "#FDE724",
+        2: "#990033"
+    }
 
-    # 3. Create figure and axis
-    fig, ax = plt.subplots(figsize=(12, 6))
+    # Plotting
+    fig, ax = plt.subplots(figsize=(6, 6))
 
-    # 4. Plot stacked bars
-    bottom = pd.Series(0.0, index=df_scaled.index)
+    bottom = 0.0
+    for traj in ordered_trajs:
+        val = percentages[traj]
+        ax.bar(0,
+               val,
+               bottom=bottom,
+               color=colors[traj],
+               width=0.4,
+               edgecolor="none"
+        )
+        bottom += val
 
-    for traj_id in stack_order:
-        if traj_id in df_scaled.columns:
-            values = df_scaled[traj_id]
-            ax.bar(
-                df_scaled.index,
-                values,
-                label=f"{traj_id}",
-                bottom=bottom,
-                color=colors[traj_id],
-                edgecolor="none",
-                width=0.9,
-            )
-            bottom += values
-
-    # 5. Customize axes and labels
     ax.set_ylabel(
-        y_label,
-        fontsize=18
+        "Change (% of study area)",
+        fontsize=16
     )
     ax.set_title(
-        "Trajectories during Time Intervals",
-        fontsize=20,
+        "Trajectories Overall",
+        fontsize=18,
         pad=15
     )
 
-    # X-Axis formatting: Horizontal labels
-    ax.tick_params(
-        axis="x",
-        labelsize=18,
-        rotation=90
-    )
+    for spine in ["top", "right", "bottom", "left"]:
+        ax.spines[spine].set_visible(True)
+        ax.spines[spine].set_color("black")
+        ax.spines[spine].set_linewidth(0.5)
 
-    # Y-Axis formatting (mticker)
     ax.tick_params(
         axis="y",
+        which="major",
         labelsize=18
     )
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=5))
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
+    ax.set_xticks([])
 
-    # Spines visible, NO GRID
-    for spine in ["top", "right", "left", "bottom"]:
-        ax.spines[spine].set_visible(True)
+    # Handle limits dynamically based on percentage
+    max_y = bottom * 1.05 if bottom > 0 else 1.0
+    ax.set_ylim(0, max_y)
 
-    # 6. Legend
-    handles, labels = ax.get_legend_handles_labels()
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=10))
 
-    if handles:
-        # Reorder handles to match 2, 3, 4, 5
-        legend_order_map = {"2": 0, "3": 1, "4": 2, "5": 3}
+    legend_elements = [
+        Patch(facecolor=colors[2], label="2"),
+        Patch(facecolor=colors[3], label="3"),
+        Patch(facecolor=colors[4], label="4"),
+        Patch(facecolor=colors[5], label="5"),
+    ]
 
-        # Sort handles based on labels
-        sorted_pairs = sorted(
-            zip(handles, labels),
-            key=lambda x: legend_order_map.get(x[1], 99),
-        )
-        sorted_handles, sorted_labels = zip(*sorted_pairs)
+    ax.legend(
+        handles=legend_elements,
+        loc="center left",
+        bbox_to_anchor=(1.05, 0.5),
+        title="Trajectory",
+        title_fontsize=14,
+        alignment="left",
+        fontsize=14,
+        frameon=False,
+    )
 
-        ax.legend(
-            sorted_handles,
-            sorted_labels,
-            loc="center left",
-            bbox_to_anchor=(1.01, 0.5),
-            title="Trajectory",
-            title_fontsize=14,
-            alignment="left",
-            fontsize=14,
-            frameon=False,
-        )
+    fig.subplots_adjust(
+        left=0.15,
+        right=0.75,
+        bottom=0.1,
+        top=0.9
+    )
 
-    plt.tight_layout()
-
-    # 7. Save figure
+    # Save the figure
     charts_dir = os.path.join(
-        output_path,
+        input_dir,
         "charts"
     )
     os.makedirs(
@@ -2244,23 +2246,18 @@ def plot_trajectory_contributions(
         exist_ok=True
     )
 
-    output_fig = os.path.join(
+    out_fig_path = os.path.join(
         charts_dir,
-        "graphic_trajectory_time_interval.png"
+        "graphic_trajectory_percentage_overall.png"
     )
     plt.savefig(
-        output_fig,
+        out_fig_path,
         dpi=300,
         bbox_inches="tight",
         format="png"
     )
     plt.show()
-
-    print(f"Figure saved to: {output_fig}")
-
-# ---------------------------------------------------------------------------
-# 5.5 PLOT TRAJECTORY OVERALL
-# ---------------------------------------------------------------------------
+    print(f"Figure saved to: {out_fig_path}")
 
 
 # ---------------------------------------------------------------------------
