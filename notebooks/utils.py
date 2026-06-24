@@ -1427,51 +1427,25 @@ def export_global_number_of_changes_raster_task(
     """
     Compute and save a raster representing the total number of class changes per pixel
     using Google Earth Engine, and export it to Google Drive.
-
-    Parameters
-    ----------
-    year_list : list[int]
-        List of years for indexing the GLanCE collection.
-    drive_folder : str
-        Directory in Google Drive to save the raster.
-    scale : int, optional
-        Spatial resolution for the export in meters, by default 300.
-
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine task.
     """
-    # Load GLanCE image collection using the existing global constant
-    collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
+    # 1. Build the stack using the robust, standard helper already defined in utils.py
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE
+    )
 
-    # Generate sequential year pairs (e.g., 2001-2010, 2010-2019...)
-    pairs = []
-    for i in range(len(year_list) - 1):
-        pairs.append((year_list[i], year_list[i + 1]))
+    # 2. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
+    stack_t = image_stack.select(band_names[:-1])
+    stack_t1 = image_stack.select(band_names[1:])
 
-    # Initialize an empty image to accumulate changes (starting at 0) with the correct band name
-    change_count_img = ee.Image(0).toInt32().rename(GLANCE_CLASS_BAND)
+    # 3. Calculate total changes across the timeline
+    change_count_img = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename(GLANCE_CLASS_BAND)
 
-    for y1, y2 in pairs:
-        # Robust date filtering using calendarRange (works on system:time_start)
-        img1 = collection.filter(ee.Filter.calendarRange(y1, y1, 'year')) \
-                         .select(GLANCE_CLASS_BAND).mosaic()
-        
-        img2 = collection.filter(ee.Filter.calendarRange(y2, y2, 'year')) \
-                         .select(GLANCE_CLASS_BAND).mosaic()
-        
-        # Identify pixels where the class changed (img1 != img2)
-        has_changed = img1.neq(img2).rename(GLANCE_CLASS_BAND)
-        
-        # Accumulate the changes
-        change_count_img = change_count_img.add(has_changed)
-
-    # Mask the change_count_img using the extent of the original dataset to exclude oceans/voids
-    valid_mask = collection.filter(ee.Filter.calendarRange(year_list[0], year_list[0], 'year')) \
-                           .select(GLANCE_CLASS_BAND).mosaic().mask()
-                           
-    masked_change_count = change_count_img.updateMask(valid_mask)
+    # 4. Mask using the global validity mask (must be valid across ALL years to preserve math integrity)
+    global_mask = image_stack.neq(NODATA_VALUE).reduce(ee.Reducer.min())
+    masked_change_count = change_count_img.updateMask(global_mask)
 
     # Unmask void/nodata pixels to NODATA_VALUE before export to differentiate from 0 (no change)
     final_export_image = masked_change_count.unmask(NODATA_VALUE).toByte()
@@ -4589,50 +4563,32 @@ def export_quantity_component_task_gee(
 ) -> ee.batch.Task:
     """
     Compute and export a raster representing the Quantity Component of change using GEE.
-
-    A pixel's quantity component is 1 when the begin class differs from
-    the finish class; otherwise, it is 0.
-
-    Parameters
-    ----------
-    year_list : list
-        List of years representing the timeline.
-    drive_folder : str
-        Google Drive folder name for exports.
-    scale : int, optional
-        Spatial resolution in meters, by default 300.
-    nodata_val : int, optional
-        NoData value to be used for masking, by default 255.
-
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine export task.
     """
-    # 1. Fetch start and end years
-    start_year = year_list[0]
-    end_year = year_list[-1]
+    # 1. Build the stack using the robust, standard helper already defined in utils.py
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
 
-    # 2. Fetch start and end images directly from the collection
-    # Note: GLANCE_COLLECTION_ID and GLANCE_CLASS_BAND must be defined in utils.py
-    start_img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-        ee.Filter.calendarRange(start_year, start_year, 'year')
-    ).select(GLANCE_CLASS_BAND).mosaic()
-    start_img = start_img.updateMask(start_img.neq(nodata_val))
+    start_img = image_stack.select(band_names[0])
+    end_img = image_stack.select(band_names[-1])
 
-    end_img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-        ee.Filter.calendarRange(end_year, end_year, 'year')
-    ).select(GLANCE_CLASS_BAND).mosaic()
-    end_img = end_img.updateMask(end_img.neq(nodata_val))
+    # 2. Compute Quantity Component: 1 if start != end, else 0
+    quantity_image = start_img.neq(end_img).multiply(1).toByte()
 
-    # 3. Compute Quantity Component: 1 if start != end, else 0
-    quantity_image = start_img.neq(end_img).multiply(1).toUint8()
+    # 3. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
+    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    quantity_image = quantity_image.updateMask(global_mask)
 
-    # 4. Apply NoData unmasking and set the system:no_data_value property
+    # 4. Apply NoData unmasking and set properties
     quantity_image = quantity_image.unmask(nodata_val)
     quantity_image = quantity_image.set('system:no_data_value', nodata_val)
 
     # 5. Define the Earth Engine export task
+    start_year = year_list[0]
+    end_year = year_list[-1]
     task_desc = f"Quantity_Component_{start_year}_{end_year}"
     task = ee.batch.Export.image.toDrive(
         image=quantity_image,
@@ -4878,35 +4834,23 @@ def export_alternation_exchange_task_gee(
 ) -> ee.batch.Task:
     """
     Compute and export a raster representing the Alternation Exchange Component using GEE.
-    This replaces the local block-by-block Numba matrix calculation.
-
-    Parameters
-    ----------
-    year_list : list
-        List of years to process.
-    drive_folder : str
-        Google Drive folder name for exports.
-    scale : int, optional
-        Spatial resolution in meters, by default 300.
-    nodata_val : int, optional
-        NoData value to be used for masking, by default 255.
-
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine export task.
     """
     print(f"Preparing Alternation Exchange GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Fetch all images in the time series
-    # Note: GLANCE_COLLECTION_ID and GLANCE_CLASS_BAND must be defined in utils.py
-    imgs = []
-    for y in year_list:
-        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-            ee.Filter.calendarRange(y, y, 'year')
-        ).select(GLANCE_CLASS_BAND).mosaic()
-        img = img.updateMask(img.neq(nodata_val))
-        imgs.append(img)
+    # 1. Build the stack using the robust, standard helper already defined in utils.py
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
+
+    # 2. Apply the global validity mask to all years to ensure strict alignment
+    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    masked_stack = image_stack.updateMask(global_mask)
+
+    # 3. Extract aligned yearly images
+    imgs = [masked_stack.select(b) for b in band_names]
 
     # 2. Get unique classes from metadata
     # Note: GLANCE_METADATA must be defined in utils.py
@@ -5214,22 +5158,28 @@ def export_alternation_shift_task_gee(
     """
     print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Fetch all images in the time series
-    imgs = []
-    for y in year_list:
-        img = ee.ImageCollection(GLANCE_COLLECTION_ID).filter(
-            ee.Filter.calendarRange(y, y, 'year')
-        ).select(GLANCE_CLASS_BAND).mosaic()
-        img = img.updateMask(img.neq(nodata_val))
-        imgs.append(img)
+    # 1. Build the stack using the robust, standard helper already defined in utils.py
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
 
-    # 2. Calculate Total Changes across all intervals
+    # 2. Apply the global validity mask to ensure strict alignment
+    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    masked_stack = image_stack.updateMask(global_mask)
+
+    # 3. Extract aligned yearly images
+    imgs = [masked_stack.select(b) for b in band_names]
+
+    # 4. Calculate Total Changes across all intervals
     total_changes = ee.Image(0).toUint8()
     for t in range(len(imgs) - 1):
         change = imgs[t].neq(imgs[t+1])
         total_changes = total_changes.add(change)
 
-    # 3. Calculate Quantity Component (start != end)
+    # 5. Calculate Quantity Component (start != end)
     quantity = imgs[0].neq(imgs[-1]).toUint8()
 
     # 4. Calculate Total Exchange
