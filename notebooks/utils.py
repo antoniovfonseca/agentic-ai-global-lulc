@@ -1066,10 +1066,9 @@ def plot_global_change_frequency_bar_chart(
 # ---------------------------------------------------------------------------
 
 def plot_number_of_changes_distribution(
-    df: pd.DataFrame,
-    image_paths: list[str],
-    nodata_val: int,
-    output_path: str,
+    input_dir: str,
+    output_dir: str,
+    nodata_val: int = NODATA_VALUE,
 ) -> None:
     """
     Generate a single stacked bar chart of the number of changes distribution.
@@ -1077,37 +1076,65 @@ def plot_number_of_changes_distribution(
     This function calculates the percentage of unique pixels that underwent
     1, 2, 3, or N total changes relative to the ENTIRE valid study area.
     """
-    # 1. Read the first raster to find the TRUE total valid study area
-    with rasterio.open(
-        image_paths[0],
-    ) as src:
-        first_raster = src.read(
-            1,
-        )
+    # 1. Find a TIF file to find the TRUE total valid study area
+    tif_patterns = [
+        os.path.join(input_dir, "rasters", "trajectory.tif"),
+        os.path.join(input_dir, "rasters", "*.tif"),
+        os.path.join(input_dir, "*.tif"),
+        os.path.join(input_dir, "Number_of_Changes_Raster*.tif"),
+    ]
+    
+    raster_path = None
+    for pattern in tif_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            raster_path = matches[0]
+            break
+
+    if not raster_path:
+        print(f"Error: No raster files (.tif) found in {input_dir} to calculate total study area.")
+        return
+
+    with rasterio.open(raster_path) as src:
+        first_raster = src.read(1)
 
     total_study_area_pixels = np.sum(
         first_raster != nodata_val,
     )
 
-    # 2. Calculate the true number of unique pixels per change category
+    # 2. Find and load the CSV containing changes per interval
+    csv_paths = [
+        os.path.join(input_dir, "tables", "number_change_per_interval.csv"),
+        os.path.join(input_dir, "number_change_per_interval.csv"),
+    ]
+    csv_path = None
+    for path in csv_paths:
+        if os.path.exists(path):
+            csv_path = path
+            break
+
+    if not csv_path:
+        print(f"Error: Could not find number_change_per_interval.csv in {input_dir}.")
+        return
+
+    df = pd.read_csv(csv_path, index_col=0)
+
+    # 3. Calculate the true number of unique pixels per change category
     unique_pixels_per_change = {}
 
     for col_name in df.columns:
-        n_changes = int(
-            col_name,
-        )
-        total_transitions = df[
-            col_name
-        ].sum()
+        try:
+            n_changes = int(float(col_name))
+        except ValueError:
+            continue
+        total_transitions = df[col_name].sum()
 
         if n_changes > 0:
             unique_pixels = total_transitions / n_changes
         else:
             unique_pixels = 0
 
-        unique_pixels_per_change[
-            n_changes
-        ] = unique_pixels
+        unique_pixels_per_change[n_changes] = unique_pixels
 
     # 3. Calculate percentages relative to the entire study area
     percentages = {}
@@ -1275,7 +1302,7 @@ def plot_number_of_changes_distribution(
 
     # 8. Save and show the figure
     charts_dir = os.path.join(
-        output_path,
+        output_dir,
         "charts",
     )
     os.makedirs(
