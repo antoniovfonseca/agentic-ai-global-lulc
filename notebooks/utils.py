@@ -1141,6 +1141,40 @@ def plot_number_of_changes_distribution(
         pct = (count / total_study_area_pixels) * 100.0
         percentages[n_changes_int] = pct
 
+    # 4. Setup Colors
+    active_changes = [
+        k for k, v in percentages.items()
+        if v > 0
+    ]
+
+    if not active_changes:
+        active_changes = list(
+            percentages.keys(),
+        )
+
+    n_colors = len(
+        active_changes,
+    )
+    cmap = plt.cm.viridis_r
+
+    sorted_changes_desc = sorted(
+        active_changes,
+        reverse=True,
+    )
+
+    colors = {
+        n: cmap(
+            i / (n_colors - 1)
+        )
+        if n_colors > 1
+        else cmap(0.5)
+        for i, n in enumerate(
+            sorted(
+                active_changes,
+            )
+        )
+    }
+
     # 5. Create the Figure
     fig, ax = plt.subplots(
         figsize=(
