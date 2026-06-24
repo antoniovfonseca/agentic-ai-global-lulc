@@ -1076,27 +1076,13 @@ def plot_number_of_changes_distribution(
     This function calculates the percentage of unique pixels that underwent
     1, 2, 3, or N total changes relative to the ENTIRE valid study area.
     """
-    # 1. Find a TIF file to find the TRUE total valid study area
-    tif_patterns = [
-        os.path.join(input_dir, "rasters", "trajectory.tif"),
-        os.path.join(input_dir, "rasters", "*.tif"),
-        os.path.join(input_dir, "*.tif"),
-        os.path.join(input_dir, "Number_of_Changes_Raster*.tif"),
-    ]
-    
-    raster_path = None
-    for pattern in tif_patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            raster_path = matches[0]
-            break
-
-    if not raster_path:
-        print(f"Error: No raster files (.tif) found in {input_dir} to calculate total study area.")
-        return
-
-    with rasterio.open(raster_path) as src:
-        first_raster = src.read(1)
+    # 1. Read the first raster to find the TRUE total valid study area
+    with rasterio.open(
+        image_paths[0],
+    ) as src:
+        first_raster = src.read(
+            1,
+        )
 
     total_study_area_pixels = np.sum(
         first_raster != nodata_val,
@@ -1119,26 +1105,50 @@ def plot_number_of_changes_distribution(
 
     df = pd.read_csv(csv_path, index_col=0)
 
+    # Fix column names to string integers and merge duplicates
+    new_cols = {}
+    for c in df.columns:
+        try:
+            new_cols[c] = str(int(float(c)))
+        except ValueError:
+            new_cols[c] = str(c)
+    df.rename(columns=new_cols, inplace=True)
+    df = df.groupby(level=0, axis=1).sum()
+
     # 3. Calculate the true number of unique pixels per change category
     unique_pixels_per_change = {}
 
     for col_name in df.columns:
         try:
-            n_changes = int(float(col_name))
+            n_changes = int(col_name)
         except ValueError:
             continue
-        total_transitions = df[col_name].sum()
+
+    # 2. Calculate the true number of unique pixels per change category
+    unique_pixels_per_change = {}
+
+    for col_name in df.columns:
+        n_changes = int(
+            col_name,
+        )
+        total_transitions = df[
+            col_name
+        ].sum()
 
         if n_changes > 0:
             unique_pixels = total_transitions / n_changes
         else:
             unique_pixels = 0
 
-        unique_pixels_per_change[n_changes] = unique_pixels
+        unique_pixels_per_change[
+            n_changes
+        ] = unique_pixels
 
     # 3. Calculate percentages relative to the entire study area
     percentages = {}
     for n_changes, count in unique_pixels_per_change.items():
+        if n_changes == 0: # Exclude stable pixels (0 changes) from being plotted
+            continue
         if total_study_area_pixels > 0:
             pct = (count / total_study_area_pixels) * 100.0
         else:
