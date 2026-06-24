@@ -667,61 +667,41 @@ def export_global_change_frequency_tasks(
     """
     Triggers GEE tasks to calculate the frequency of pixel changes for each
     consecutive interval in a time series and exports them as CSV files.
-
-    This function calculates how many times pixels change their class over the 
-    ENTIRE time series, and breaks this down by temporal interval. For each 
-    interval, it counts the pixels that changed and groups them by their total 
-    number of changes across all years, mimicking local Numba logic.
-    A global mask ensures that only valid pixels are evaluated.
-
-    Parameters
-    ----------
-    year_list : list
-        A list of 4-digit years to process (e.g., [2001, 2002, 2003]).
-    drive_folder : str
-        Google Drive folder name for the exported CSV files.
-    scale : int, optional
-        The scale in meters for the GEE reduction. Default is 300.
-
-    Returns
-    -------
-    list
-        A list containing all the triggered ee.batch.Task objects.
     """
-    # 1. Build a global mask and get yearly images for a consistent study area
-    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+    # 1. Build the stack using the robust, standard helper already defined in utils.py
+    image_stack, band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=NODATA_VALUE,
     )
 
-    yearly_by_year = {year: image for year, image in yearly_images}
+    # 2. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
+    stack_t = image_stack.select(band_names[:-1])
+    stack_t1 = image_stack.select(band_names[1:])
+
+    # 3. Calculate total changes across the entire timeline
+    total_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename('num_changes')
+
+    # 4. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
+    global_mask = image_stack.neq(NODATA_VALUE).reduce(ee.Reducer.min())
+    total_changes_masked = total_changes.updateMask(global_mask)
+
     tasks_list = []
 
-    # 2. Calculate the total number of changes over the ENTIRE time series
-    total_changes = ee.Image(0).toInt32().rename('num_changes')
-    for i in range(len(year_list) - 1):
-        start_year = year_list[i]
-        end_year = year_list[i + 1]
-        img_start = yearly_by_year[start_year].updateMask(global_mask)
-        img_end = yearly_by_year[end_year].updateMask(global_mask)
-        interval_change = img_start.neq(img_end)
-        total_changes = total_changes.add(interval_change)
-
-    # 3. Iterate through each consecutive interval again to mask and export
+    # 5. Iterate through each consecutive interval to mask and export
     for i in range(len(year_list) - 1):
         start_year = year_list[i]
         end_year = year_list[i + 1]
 
-        img_start = yearly_by_year[start_year].updateMask(global_mask)
-        img_end = yearly_by_year[end_year].updateMask(global_mask)
+        img_start = image_stack.select(band_names[i]).updateMask(global_mask)
+        img_end = image_stack.select(band_names[i + 1]).updateMask(global_mask)
 
         # Mask total_changes to only include pixels that changed in THIS interval
         interval_change = img_start.neq(img_end)
-        interval_total_changes = total_changes.updateMask(interval_change)
+        interval_total_changes = total_changes_masked.updateMask(interval_change)
 
-        # 4. Compute the frequency histogram of the total changes for these pixels
+        # 6. Compute the frequency histogram of the total changes for these pixels
         histogram = interval_total_changes.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=GLOBAL_GEOM,
@@ -735,7 +715,7 @@ def export_global_change_frequency_tasks(
         feature = ee.Feature(None, hist_dict)
         fc = ee.FeatureCollection([feature])
 
-        # 5. Configure and start the export task
+        # 7. Configure and start the export task
         export_name = f"Number_Change_{start_year}_{end_year}"
         task = ee.batch.Export.table.toDrive(
             collection=fc,
