@@ -1103,27 +1103,18 @@ def plot_number_of_changes_distribution(
 
     print(f"Loading overall change frequency directly from raster: {raster_path}")
 
-    # 2. Read raster and compute unique counts
+    # 2. Read raster and compute unique counts in memory-efficient chunks to avoid OOM crash
+    data_counts = {}
     with rasterio.open(raster_path) as src:
-        change_data = src.read(1)
         nodata = src.nodata if src.nodata is not None else nodata_val
-
-    masked_change = np.ma.masked_where(
-        change_data == nodata,
-        change_data,
-    )
-
-    unique_vals, counts = np.unique(
-        masked_change.compressed(),
-        return_counts=True,
-    )
-
-    data_counts = dict(
-        zip(
-            unique_vals,
-            counts,
-        ),
-    )
+        for _, window in src.block_windows():
+            chunk = src.read(1, window=window)
+            valid_pixels = chunk[chunk != nodata]
+            if valid_pixels.size > 0:
+                vals, counts = np.unique(valid_pixels, return_counts=True)
+                for v, c in zip(vals, counts):
+                    v_int = int(v)
+                    data_counts[v_int] = data_counts.get(v_int, 0) + int(c)
 
     total_study_area_pixels = sum(data_counts.values())
 
