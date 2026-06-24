@@ -1076,17 +1076,29 @@ def plot_number_of_changes_distribution(
     This function calculates the percentage of unique pixels that underwent
     1, 2, 3, or N total changes relative to the ENTIRE valid study area.
     """
-    # 1. Read the first raster to find the TRUE total valid study area
-    with rasterio.open(
-        image_paths[0],
-    ) as src:
-        first_raster = src.read(
-            1,
-        )
-
-    total_study_area_pixels = np.sum(
-        first_raster != nodata_val,
+    # 1. Dynamically locate raster files to find the TRUE total valid study area
+    image_paths = sorted(
+        glob.glob(os.path.join(input_dir, "*.tif")) +
+        glob.glob(os.path.join(input_dir, "rasters", "*.tif")) +
+        glob.glob(os.path.join(input_dir, "masked", "*.tif"))
     )
+
+    total_study_area_pixels = 0.0
+    if image_paths:
+        with rasterio.open(image_paths[0]) as src:
+            first_raster = src.read(1)
+        total_study_area_pixels = np.sum(first_raster != nodata_val)
+    else:
+        # Fallback to Pixel_Counts_LULC CSVs if no raster is found in the path
+        pixel_count_files = glob.glob(os.path.join(input_dir, "Pixel_Counts_LULC_*.csv"))
+        if pixel_count_files:
+            df_pixels = pd.read_csv(pixel_count_files[0])
+            num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c]
+            total_study_area_pixels = df_pixels[num_cols_pixels].sum().sum()
+
+    if total_study_area_pixels == 0:
+        print(f"Error: Could not calculate total study area from rasters or CSVs in {input_dir}.")
+        return
 
     # 2. Find and load the CSV containing changes per interval
     csv_paths = [
@@ -1123,26 +1135,14 @@ def plot_number_of_changes_distribution(
             n_changes = int(col_name)
         except ValueError:
             continue
-
-    # 2. Calculate the true number of unique pixels per change category
-    unique_pixels_per_change = {}
-
-    for col_name in df.columns:
-        n_changes = int(
-            col_name,
-        )
-        total_transitions = df[
-            col_name
-        ].sum()
+        total_transitions = df[col_name].sum()
 
         if n_changes > 0:
             unique_pixels = total_transitions / n_changes
         else:
             unique_pixels = 0
 
-        unique_pixels_per_change[
-            n_changes
-        ] = unique_pixels
+        unique_pixels_per_change[n_changes] = unique_pixels
 
     # 3. Calculate percentages relative to the entire study area
     percentages = {}
