@@ -5604,24 +5604,27 @@ def calculate_trajectory_gee(
     # 6. Identify pixels with extent change
     extent_change = start_equals_end.Not()
 
-    # 7. Initialize images to track direct transitions and path changes
-    has_direct_transition = ee.Image(0)
-    path_changes = ee.Image(0)
-
+    # 7. Pre-compute flat lists of transitions and changes across all consecutive pairs
+    diff_images = []
+    direct_trans_images = []
     length = len(band_names)
 
-    # 8. Iterate over the time steps to evaluate transitions
     for i in range(length - 1):
         current_band = image_stack.select(band_names[i])
         next_band = image_stack.select(band_names[i + 1])
 
         # 9. Check for a direct transition from start to end class
         is_direct = current_band.eq(start_img).And(next_band.eq(end_img))
-        has_direct_transition = has_direct_transition.Or(is_direct)
+        direct_trans_images.append(is_direct)
 
         # 10. Increment path changes when the class changes between steps
         is_change = current_band.neq(next_band)
-        path_changes = path_changes.add(is_change)
+        diff_images.append(is_change)
+
+    # 8. Reduce flat lists using optimized, native ImageCollection reductions
+    # This completely eliminates recursive nested .Or() and .add() calls
+    has_direct_transition = ee.ImageCollection.fromImages(direct_trans_images).max()
+    path_changes = ee.ImageCollection.fromImages(diff_images).sum()
 
     # 11. Assign Trajectory 5 for extent change without direct transition
     traj_5 = extent_change.And(has_direct_transition.Not()).multiply(5)
