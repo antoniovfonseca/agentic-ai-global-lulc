@@ -858,6 +858,10 @@ def plot_global_change_frequency_bar_chart(
         inplace=True,
     )
 
+        # Remove stable pixels (0 changes) from both the stacked bars and legend
+        if "0" in df.columns:
+            df = df.drop(columns=["0"])
+
     # 5. Sort columns numerically
     sorted_cols = sorted(
         df.columns,
