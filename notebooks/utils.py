@@ -36,15 +36,15 @@ NODATA_VALUE = 255
 GLANCE_COLLECTION_ID = "projects/GLANCE/DATASETS/V001"
 GLANCE_CLASS_BAND = "LC"
 
-# Current bounding box geometry (configured for North America - NA)
+# Current bounding box geometry (configured for South America - SA)
 GLOBAL_GEOM = ee.Geometry.Rectangle(
-    [-170.0, 15.0, -50.0, 85.0],
+    [-90.0, -56.0, -30.0, 15.0],
     "EPSG:4326",
     False,
 )
 
-# GLanCE official WKT projection system (configured for North America - NA)
-GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - NA - V01",
+# GLanCE official WKT projection system (configured for South America - SA)
+GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - SA - V01",
     GEOGCS["GCS_WGS_1984",
         DATUM["D_WGS_1984",
             SPHEROID["WGS_1984",6378137.0,298.257223563]],
@@ -53,13 +53,13 @@ GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - NA - V01"
     PROJECTION["Lambert_Azimuthal_Equal_Area"],
     PARAMETER["false_easting",0.0],
     PARAMETER["false_northing",0.0],
-    PARAMETER["longitude_of_center",-100],
-    PARAMETER["latitude_of_center",50],
+    PARAMETER["longitude_of_center",-60],
+    PARAMETER["latitude_of_center",-15],
     UNIT["meter",1.0]]"""
 
-# GLanCE Grid parameters for custom clipping/exporting (configured for North America - NA)
+# GLanCE Grid parameters for custom clipping/exporting (configured for South America - SA)
 GLANCE_RESOLUTION = [30, 30]
-GLANCE_UL_XY = (-7633670.00, 5076465.0)
+GLANCE_UL_XY = (-6918770.00, 4899705.0)
 
 # 3. Class Metadata
 GLANCE_METADATA = {
