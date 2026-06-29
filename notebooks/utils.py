@@ -125,7 +125,7 @@ def build_global_valid_mask_and_yearly_images(
     yearly_images_masked = []
     for i, year in enumerate(year_list):
         original_image_for_year = image_stack.select(band_names[i])
-        masked_image_year = original_image_for_year.updateMask(global_mask)
+        masked_image_year = original_image_for_year.updateMask(global_mask).rename(band_name)
         yearly_images_masked.append((year, masked_image_year))
 
     return global_mask, yearly_images_masked
