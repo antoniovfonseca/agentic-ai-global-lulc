@@ -36,15 +36,15 @@ NODATA_VALUE = 255
 GLANCE_COLLECTION_ID = "projects/GLANCE/DATASETS/V001"
 GLANCE_CLASS_BAND = "LC"
 
-# Current bounding box geometry (configured for Antarctica - AN)
+# Current bounding box geometry (configured for Africa - AF)
 GLOBAL_GEOM = ee.Geometry.Rectangle(
-    [-180.0, -90.0, 180.0, -60.0],
+    [-26.0, -35.0, 52.0, 38.0],
     "EPSG:4326",
     False,
 )
 
-# GLanCE official WKT projection system (configured for Antarctica - AN)
-GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AN - V01",
+# GLanCE official WKT projection system (configured for Africa - AF)
+GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AF - V01",
     GEOGCS["GCS_WGS_1984",
         DATUM["D_WGS_1984",
             SPHEROID["WGS_1984",6378137.0,298.257223563]],
@@ -53,13 +53,13 @@ GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AN - V01"
     PROJECTION["Lambert_Azimuthal_Equal_Area"],
     PARAMETER["false_easting",0.0],
     PARAMETER["false_northing",0.0],
-    PARAMETER["longitude_of_center",0],
-    PARAMETER["latitude_of_center",-90],
+    PARAMETER["longitude_of_center",20],
+    PARAMETER["latitude_of_center",5],
     UNIT["meter",1.0]]"""
 
-# GLanCE Grid parameters for custom clipping/exporting (configured for Antarctica - AN)
+# GLanCE Grid parameters for custom clipping/exporting (configured for Africa - AF)
 GLANCE_RESOLUTION = [30, 30]
-GLANCE_UL_XY = (-3662210.00, 5169375.0)
+GLANCE_UL_XY = (-5312270.00, 3707205.0)
 
 # 3. Class Metadata
 GLANCE_METADATA = {
@@ -104,24 +104,31 @@ def build_global_valid_mask_and_yearly_images(
     band_name: str,
     nodata_val: int,
 ) -> tuple[ee.Image, list[tuple[int, ee.Image]]]:
-    collection = ee.ImageCollection(collection_id).select(band_name)
+    """
+    Builds a global valid mask (pixels valid across all years) and returns
+    yearly images, all pre-masked with this global mask.
+    Ensures strict consistency of valid pixels across all analyses.
+    """
+    # 1. Build the image stack using the existing helper
+    image_stack, band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
 
-    yearly_images = []
-    mask_images = []
+    # 2. Create the global mask from the stack, ensuring strict intersection
+    # A pixel is valid only if it's not NODATA_VALUE in *all* bands of the stack.
+    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
 
-    for year in year_list:
-        image_year = collection.filter(
-            ee.Filter.calendarRange(year, year, "year")
-        ).mosaic()
+    # 3. Prepare yearly_images, applying the global_mask to each original image
+    yearly_images_masked = []
+    for i, year in enumerate(year_list):
+        original_image_for_year = image_stack.select(band_names[i])
+        masked_image_year = original_image_for_year.updateMask(global_mask)
+        yearly_images_masked.append((year, masked_image_year))
 
-        yearly_images.append((year, image_year))
-        mask_images.append(image_year.neq(nodata_val))
-
-    # Optimize computation graph by flattening the mask creation
-    mask_collection = ee.ImageCollection.fromImages(mask_images)
-    global_mask = mask_collection.min().eq(1)
-
-    return global_mask, yearly_images
+    return global_mask, yearly_images_masked
 
 ###############################################################################
 #                                                                             #
@@ -382,53 +389,62 @@ def plot_pixel_counts_bar_chart(
     output_dir : str
         Directory path where the output plot will be saved.
     """
+    tables_dir = os.path.join(output_dir, "tables")
+    consolidated_csv_path = os.path.join(tables_dir, "aggregated_pixel_counts.csv")
 
-    # 1. Read and aggregate GEE CSVs
-    csv_pattern = os.path.join(input_dir, "*.csv")
+    # 1. Read and aggregate GEE CSVs or load existing consolidated CSV
+    csv_pattern = os.path.join(input_dir, "Pixel_Counts_LULC_*.csv")
     csv_files = glob.glob(csv_pattern)
 
-    yearly_data = {}
-    for file in csv_files:
-        basename = os.path.basename(file)
-        # Extract 4-digit year from the filename
-        match = re.search(r"(\d{4})", basename)
-        if not match:
-            continue
-        
-        year = int(match.group(1))
-        df_csv = pd.read_csv(file)
-        
-        row_dict = {}
-        for col in df_csv.columns:
-            try:
-                # Convert string column names (e.g., '1', '2') to integer IDs
-                class_id = int(col)
-                if class_id in class_labels_dict:
-                    class_name = class_labels_dict[class_id]["name"]
-                    row_dict[class_name] = df_csv[col].sum()
-            except ValueError:
-                # Ignore non-integer columns (like 'system:index')
-                pass
-        
-        if row_dict:
-            # Accumulate counts if a year is split across multiple files (quadrants)
-            if year not in yearly_data:
-                yearly_data[year] = row_dict
-            else:
-                for class_name, count in row_dict.items():
-                    yearly_data[year][class_name] = yearly_data[year].get(class_name, 0) + count
+    pivot_pixels = None
 
-    if not yearly_data:
-        print(f"No valid GEE CSV data found in {input_dir}")
+    if not csv_files and os.path.exists(consolidated_csv_path):
+        print(f"No raw GEE CSVs found, but detected consolidated CSV. Loading: {consolidated_csv_path}")
+        pivot_pixels = pd.read_csv(consolidated_csv_path, index_col="Year")
+    elif csv_files:
+        yearly_data = {}
+        for file in csv_files:
+            basename = os.path.basename(file)
+            match = re.search(r"(\d{4})", basename)
+            if not match:
+                continue
+            
+            year = int(match.group(1))
+            df_csv = pd.read_csv(file)
+            
+            row_dict = {}
+            for col in df_csv.columns:
+                try:
+                    class_id = int(col)
+                    if class_id in class_labels_dict:
+                        class_name = class_labels_dict[class_id]["name"]
+                        row_dict[class_name] = df_csv[col].sum()
+                except ValueError:
+                    pass
+            
+            if row_dict:
+                if year not in yearly_data:
+                    yearly_data[year] = row_dict
+                else:
+                    for class_name, count in row_dict.items():
+                        yearly_data[year][class_name] = yearly_data[year].get(class_name, 0) + count
+
+        if yearly_data:
+            pivot_pixels = pd.DataFrame.from_dict(
+                yearly_data,
+                orient='index'
+            ).fillna(0)
+            pivot_pixels.sort_index(inplace=True)
+            pivot_pixels.index.name = "Year"
+            
+            # Save consolidated aggregated data to CSV
+            os.makedirs(tables_dir, exist_ok=True)
+            pivot_pixels.to_csv(consolidated_csv_path)
+            print(f"Consolidated pixel counts saved to: {consolidated_csv_path}")
+
+    if pivot_pixels is None or pivot_pixels.empty:
+        print(f"No valid GEE CSV data found in {input_dir} and no consolidated CSV found at {consolidated_csv_path}")
         return
-
-    # Create pivot table from aggregated data
-    pivot_pixels = pd.DataFrame.from_dict(
-        yearly_data,
-        orient='index'
-    ).fillna(0)
-    pivot_pixels.sort_index(inplace=True)
-    pivot_pixels.index.name = "Year"
 
     years_array = pivot_pixels.index.values
 
