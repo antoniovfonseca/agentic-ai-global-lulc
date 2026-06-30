@@ -777,7 +777,8 @@ def plot_global_change_frequency_bar_chart(
 ) -> None:
     """
     Create a stacked bar chart showing the sequence of changes per interval
-    by compiling multiple GEE-exported CSV files.
+    by compiling multiple GEE-exported CSV files, saving a consolidated CSV 
+    for performance caching.
 
     Parameters
     ----------
@@ -785,133 +786,72 @@ def plot_global_change_frequency_bar_chart(
         Directory containing the 'Number_Change_*.csv' files.
     output_dir : str
         Directory to save the resulting figure.
-
-    Returns
-    -------
-    None
     """
-    # 1. Read and compile the GEE CSV files
-    search_pattern = os.path.join(
-        input_dir,
-        "Number_Change_*.csv",
-    )
-    csv_files = glob.glob(
-        search_pattern,
-    )
+    tables_dir = os.path.join(output_dir, "tables")
+    consolidated_csv_path = os.path.join(tables_dir, "aggregated_change_frequency.csv")
 
-    if not csv_files:
-        print(
-            f"No Number_Change CSVs found in {input_dir}",
-        )
+    # 1. Read and compile the GEE CSV files or load existing consolidated CSV
+    search_pattern = os.path.join(input_dir, "Number_Change_*.csv")
+    csv_files = glob.glob(search_pattern)
+
+    df = None
+
+    if not csv_files and os.path.exists(consolidated_csv_path):
+        print(f"No raw GEE change frequency CSVs found, but detected consolidated CSV. Loading: {consolidated_csv_path}")
+        df = pd.read_csv(consolidated_csv_path, index_col=0)
+        df.columns = df.columns.astype(str)
+    elif csv_files:
+        records = {}
+        for file_path in csv_files:
+            basename = os.path.basename(file_path)
+            # Avoid matching consolidated or other system CSV files
+            if "Overall" in basename or "aggregated" in basename:
+                continue
+                
+            interval_str = basename.replace("Number_Change_", "").replace(".csv", "")
+            parts = interval_str.split("_")
+            if len(parts) == 2:
+                label = f"{parts[0]}-{parts[1]}"
+            else:
+                label = interval_str
+
+            df_temp = pd.read_csv(file_path)
+            num_cols = df_temp.select_dtypes(include=['number']).columns
+            num_cols = [c for c in num_cols if 'system' not in c]
+
+            if num_cols:
+                row_data = df_temp[num_cols].sum()
+                records[label] = row_data
+
+        if records:
+            df = pd.DataFrame.from_dict(records, orient='index').fillna(0)
+            
+            # Fix column names (e.g. float keys "1.0" to integer strings "1")
+            new_cols = {}
+            for c in df.columns:
+                try:
+                    int_c = int(float(c))
+                    new_cols[c] = str(int_c)
+                except ValueError:
+                    new_cols[c] = str(c)
+            df.rename(columns=new_cols, inplace=True)
+
+            # Remove stable pixels (0 changes) from stacked bars
+            if "0" in df.columns:
+                df = df.drop(columns=["0"])
+
+            sorted_cols = sorted(df.columns, key=lambda x: int(x) if x.isdigit() else float('inf'))
+            df = df[sorted_cols]
+            df.sort_index(inplace=True)
+            
+            # Save consolidated aggregated data to CSV
+            os.makedirs(tables_dir, exist_ok=True)
+            df.to_csv(consolidated_csv_path)
+            print(f"Consolidated change frequency saved to: {consolidated_csv_path}")
+
+    if df is None or df.empty:
+        print(f"No valid GEE CSV data found in {input_dir} and no consolidated CSV found at {consolidated_csv_path}")
         return
-
-    records = {}
-    for file_path in csv_files:
-        basename = os.path.basename(
-            file_path,
-        )
-        # Extract interval label from filename (e.g. "Number_Change_2001_2010.csv" -> "2001-2010")
-        interval_str = basename.replace(
-            "Number_Change_",
-            "",
-        ).replace(
-            ".csv",
-            "",
-        )
-
-        parts = interval_str.split(
-            "_",
-        )
-        if len(
-            parts,
-        ) == 2:
-            label = f"{parts[0]}-{parts[1]}"
-        else:
-            label = interval_str
-
-        df_temp = pd.read_csv(
-            file_path,
-        )
-
-        # 2. Filter numeric columns and remove GEE system columns
-        num_cols = df_temp.select_dtypes(
-            include=[
-                'number',
-            ],
-        ).columns
-        num_cols = [
-            c for c in num_cols
-            if 'system' not in c
-        ]
-
-        if num_cols:
-            # The histogram dictionary values are flattened into these columns
-            row_data = df_temp[
-                num_cols
-            ].sum()
-            records[
-                label
-            ] = row_data
-
-    if not records:
-        print(
-            "No valid data found in CSVs.",
-        )
-        return
-
-    # 3. Build a consolidated DataFrame
-    df = pd.DataFrame.from_dict(
-        records,
-        orient='index',
-    )
-    df.fillna(
-        0,
-        inplace=True,
-    )
-
-    # 4. Fix column names (GEE often exports numeric keys as floats like "1.0")
-    new_cols = {}
-    for c in df.columns:
-        try:
-            int_c = int(
-                float(
-                    c,
-                ),
-            )
-            new_cols[
-                c
-            ] = str(
-                int_c,
-            )
-        except ValueError:
-            new_cols[
-                c
-            ] = str(
-                c,
-            )
-
-    df.rename(
-        columns=new_cols,
-        inplace=True,
-    )
-
-    # Remove stable pixels (0 changes) from both the stacked bars and legend
-    if "0" in df.columns:
-        df = df.drop(columns=["0"])
-
-    # 5. Sort columns numerically
-    sorted_cols = sorted(
-        df.columns,
-        key=lambda x: int(x) if x.isdigit() else float('inf')
-    )
-    df = df[
-        sorted_cols
-    ]
-
-    # 6. Sort index chronologically
-    df.sort_index(
-        inplace=True,
-    )
 
     # 7. Determine Unit Scaling
     max_val = df.sum(
