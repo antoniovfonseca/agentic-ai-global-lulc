@@ -1958,13 +1958,6 @@ def plot_trajectory_contributions(
     """
     Create stacked bar chart for trajectory contributions per interval,
     caching the aggregated data to a consolidated CSV file.
-
-    Parameters
-    ----------
-    input_dir : str
-        Directory path containing the raw 'Trajectory_Contributions_*.csv' files.
-    output_dir : str
-        Directory path where output tables and charts will be saved.
     """
     tables_dir = os.path.join(output_dir, "tables")
     consolidated_csv_path = os.path.join(tables_dir, "aggregated_trajectory_contributions.csv")
@@ -2106,6 +2099,50 @@ def plot_trajectory_contributions(
     if handles:
         # Reorder handles to match 2, 3, 4, 5
         legend_order_map = {"2": 0, "3": 1, "4": 2, "5": 3}
+
+        # Sort handles based on labels
+        sorted_pairs = sorted(
+            zip(handles, labels),
+            key=lambda x: legend_order_map.get(x[1], 99),
+        )
+        sorted_handles, sorted_labels = zip(*sorted_pairs)
+
+        ax.legend(
+            sorted_handles,
+            sorted_labels,
+            loc="center left",
+            bbox_to_anchor=(1.01, 0.5),
+            title="Trajectory",
+            title_fontsize=14,
+            alignment="left",
+            fontsize=14,
+            frameon=False,
+        )
+
+    plt.tight_layout()
+
+    # 7. Save figure
+    charts_dir = os.path.join(
+        output_dir,
+        "charts"
+    )
+    os.makedirs(
+        charts_dir,
+        exist_ok=True
+    )
+    output_fig = os.path.join(
+        charts_dir,
+        "graphic_trajectory_time_interval.png"
+    )
+    plt.savefig(
+        output_fig,
+        dpi=300,
+        bbox_inches="tight",
+        format="png"
+    )
+    plt.show()
+
+    print(f"Figure saved to: {output_fig}")
 
         # Sort handles based on labels
         sorted_pairs = sorted(
