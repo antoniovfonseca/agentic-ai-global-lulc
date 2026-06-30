@@ -2569,7 +2569,7 @@ def plot_trajectory_map(
 def export_global_transition_tasks(
     year_list,
     drive_folder="GLANCE_Transitions",
-    scale=30
+    scale=30,
     full_year_list: list = None,
 ):
     """
