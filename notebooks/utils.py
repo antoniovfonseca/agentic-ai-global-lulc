@@ -2570,6 +2570,7 @@ def export_global_transition_tasks(
     year_list,
     drive_folder="GLANCE_Transitions",
     scale=30
+    full_year_list: list = None,
 ):
     """
     Triggers asynchronous GEE tasks to export global transition matrices.
@@ -2610,20 +2611,37 @@ def export_global_transition_tasks(
     
     triggered_tasks = []
 
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
+    )
+    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
+    )
+
     # 3. Iterate through each pair to define and start export tasks
     for y1, y2 in pairs:
         label = f"transition_{y1}_{y2}"
         
-        # 4. Filter and mosaic images for the start and end years
-        img_start = collection.filterDate(
-            f"{y1}-01-01", 
-            f"{y1}-12-31"
-        ).mosaic().select(GLANCE_CLASS_BAND)
-        
-        img_end = collection.filterDate(
-            f"{y2}-01-01", 
-            f"{y2}-12-31"
-        ).mosaic().select(GLANCE_CLASS_BAND)
+        # Find the index of y1 and y2 in year_list
+        idx1 = year_list.index(y1)
+        idx2 = year_list.index(y2)
+
+        # Select images from the target stack and apply global mask
+        img_start = target_stack.select(target_band_names[idx1]).rename(GLANCE_CLASS_BAND).updateMask(global_mask)
+        img_end = target_stack.select(target_band_names[idx2]).rename(GLANCE_CLASS_BAND).updateMask(global_mask)
 
         # 5. Create transition image: (Start * 100) + End
         transition_image = img_start.multiply(100).add(img_end)
@@ -2634,7 +2652,9 @@ def export_global_transition_tasks(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=GLOBAL_GEOM,
             scale=scale,
-            maxPixels=1e13
+            crs="EPSG:4326",
+            maxPixels=1e13,
+            tileScale=16,
         )
 
         # 7. Create a feature collection with the statistics for export
