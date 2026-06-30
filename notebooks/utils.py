@@ -2144,50 +2144,6 @@ def plot_trajectory_contributions(
 
     print(f"Figure saved to: {output_fig}")
 
-        # Sort handles based on labels
-        sorted_pairs = sorted(
-            zip(handles, labels),
-            key=lambda x: legend_order_map.get(x[1], 99),
-        )
-        sorted_handles, sorted_labels = zip(*sorted_pairs)
-
-        ax.legend(
-            sorted_handles,
-            sorted_labels,
-            loc="center left",
-            bbox_to_anchor=(1.01, 0.5),
-            title="Trajectory",
-            title_fontsize=14,
-            alignment="left",
-            fontsize=14,
-            frameon=False,
-        )
-
-    plt.tight_layout()
-
-    # 7. Save figure
-    charts_dir = os.path.join(
-        output_dir,
-        "charts"
-    )
-    os.makedirs(
-        charts_dir,
-        exist_ok=True
-    )
-    output_fig = os.path.join(
-        charts_dir,
-        "graphic_trajectory_time_interval.png"
-    )
-    plt.savefig(
-        output_fig,
-        dpi=300,
-        bbox_inches="tight",
-        format="png"
-    )
-    plt.show()
-
-    print(f"Figure saved to: {output_fig}")
-
 # ---------------------------------------------------------------------------
 # 5.4 EXPORT TRAJECTORY OVERALL
 # ---------------------------------------------------------------------------
