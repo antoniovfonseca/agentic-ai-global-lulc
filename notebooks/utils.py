@@ -740,7 +740,7 @@ def export_global_change_frequency_tasks(
 
         # 6. Compute the frequency histogram of the total changes for these pixels
         histogram = interval_total_changes.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
+            reducer=ee.Reducer.frequencyHistogram().unweighted(),
             geometry=GLOBAL_GEOM,
             scale=scale,
             crs="EPSG:4326",
@@ -826,6 +826,8 @@ def plot_global_change_frequency_bar_chart(
 
         if records:
             df = pd.DataFrame.from_dict(records, orient='index').fillna(0)
+            # Round and convert to integer since we are counting discrete pixels
+            df = df.round(0).astype(int)
             
             # Fix column names (e.g. float keys "1.0" to integer strings "1")
             new_cols = {}
@@ -1797,7 +1799,7 @@ def export_trajectory_intervals_csv_gee(
 
     # 5. Run a SINGLE parallel reduction over all bands (massively faster!)
     histograms = combined_intervals_image.reduceRegion(
-        reducer=ee.Reducer.frequencyHistogram(),
+        reducer=ee.Reducer.frequencyHistogram().unweighted(),
         geometry=GLOBAL_GEOM,
         scale=scale,
         crs="EPSG:4326",
@@ -2594,7 +2596,7 @@ def export_global_transition_tasks(
         # 6. Reduce the image to a frequency histogram (Table format)
         # Using a Feature to wrap the result for CSV export
         transition_stats = transition_image.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
+            reducer=ee.Reducer.frequencyHistogram().unweighted(),
             geometry=GLOBAL_GEOM,
             scale=scale,
             crs="EPSG:4326",
@@ -2658,7 +2660,7 @@ def export_unaccounted_extent_task_gee(
 
     # 6. Reduce the region to a standard frequency histogram
     histogram = unaccounted_transition_code.reduceRegion(
-        reducer=ee.Reducer.frequencyHistogram(),
+        reducer=ee.Reducer.frequencyHistogram().unweighted(),
         geometry=GLOBAL_GEOM,
         scale=scale,
         maxPixels=1e13,
@@ -5455,7 +5457,7 @@ def export_interval_transition_matrices_gee(
         transition_img = img_start.multiply(100).add(img_end).rename("transition")
 
         histogram = transition_img.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
+            reducer=ee.Reducer.frequencyHistogram().unweighted(),
             geometry=GLOBAL_GEOM,
             scale=scale,
             crs="EPSG:4326",
@@ -6211,7 +6213,7 @@ def export_global_overall_change_frequency_csv_gee(
 
     # 5. Compute the frequency histogram of the total changes for these pixels
     histogram = total_changes_masked.reduceRegion(
-        reducer=ee.Reducer.frequencyHistogram(),
+        reducer=ee.Reducer.frequencyHistogram().unweighted(),
         geometry=GLOBAL_GEOM,
         scale=scale,
         crs="EPSG:4326",
