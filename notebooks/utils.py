@@ -1783,39 +1783,33 @@ def export_trajectory_task_gee(
 ) -> ee.batch.Task:
     """
     Generate the trajectory raster and submit an export task to Google Earth Engine.
-
-    Parameters
-    ----------
-    year_list : list
-        List of integer years to process.
-    drive_folder : str
-        The destination folder in Google Drive.
-    scale : int
-        The spatial resolution for the export in meters.
-    collection_id : str
-        The GEE ImageCollection ID.
-    band_name : str
-        The band name to select.
-    nodata_val : int
-        The NoData value to mask out.
-
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine task object.
     """
-    # 1. Build the image stack
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
+    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=collection_id,
         band_name=band_name,
         nodata_val=nodata_val,
     )
 
-    # 2. Generate the trajectory classification image
+    # 3. Generate the trajectory classification image using the consistent global mask
     trajectory_image = calculate_trajectory_gee(
-        image_stack,
-        band_names,
+        target_stack,
+        target_band_names,
+        global_mask,
+        nodata_val,
     )
 
     # 3. Apply NoData unmasking to match the project's standard
@@ -1830,6 +1824,7 @@ def export_trajectory_task_gee(
         scale=scale,
         region=GLOBAL_GEOM,
         maxPixels=1e13,
+        crs="EPSG:4326",
     )
 
     # 5. Start the export task
@@ -5418,6 +5413,7 @@ MATRIX_META = {
 def calculate_trajectory_gee(
     image_stack: ee.Image,
     band_names: list,
+    global_mask: ee.Image,
     nodata_val: int = NODATA_VALUE,
 ) -> ee.Image:
     """
