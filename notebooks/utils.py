@@ -758,23 +758,33 @@ def export_global_change_frequency_tasks(
     Triggers GEE tasks to calculate the frequency of pixel changes for each
     consecutive interval in a time series and exports them as CSV files.
     """
-    # 1. Build the stack using the robust, standard helper already defined in utils.py
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
+    )
+    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=NODATA_VALUE,
     )
 
-    # 2. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
-    stack_t = image_stack.select(band_names[:-1])
-    stack_t1 = image_stack.select(band_names[1:])
+    # 3. Shift the target stack by 1 band to compare t and t+1 in parallel (vectorized)
+    stack_t = target_stack.select(target_band_names[:-1])
+    stack_t1 = target_stack.select(target_band_names[1:])
 
-    # 3. Calculate total changes across the entire timeline
+    # 4. Calculate total changes across the target years timeline
     total_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename('num_changes')
 
-    # 4. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
-    global_mask = image_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
     total_changes_masked = total_changes.updateMask(global_mask)
 
     tasks_list = []
@@ -784,8 +794,8 @@ def export_global_change_frequency_tasks(
         start_year = year_list[i]
         end_year = year_list[i + 1]
 
-        img_start = image_stack.select(band_names[i]).updateMask(global_mask)
-        img_end = image_stack.select(band_names[i + 1]).updateMask(global_mask)
+        img_start = target_stack.select(target_band_names[i]).rename(GLANCE_CLASS_BAND).updateMask(global_mask)
+        img_end = target_stack.select(target_band_names[i + 1]).rename(GLANCE_CLASS_BAND).updateMask(global_mask)
 
         # Mask total_changes to only include pixels that changed in THIS interval
         interval_change = img_start.neq(img_end)
@@ -854,6 +864,7 @@ def plot_global_change_frequency_bar_chart(
         print(f"No raw GEE change frequency CSVs found, but detected consolidated CSV. Loading: {consolidated_csv_path}")
         df = pd.read_csv(consolidated_csv_path, index_col=0)
         df.columns = df.columns.astype(str)
+        df = df.round(0).astype(int)
     elif csv_files:
         records = {}
         for file_path in csv_files:
@@ -1361,23 +1372,33 @@ def export_global_number_of_changes_raster_task(
     Compute and save a raster representing the total number of class changes per pixel
     using Google Earth Engine, and export it to Google Drive.
     """
-    # 1. Build the stack using the robust, standard helper already defined in utils.py
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE
+    )
+    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=NODATA_VALUE
     )
 
-    # 2. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
-    stack_t = image_stack.select(band_names[:-1])
-    stack_t1 = image_stack.select(band_names[1:])
+    # 3. Shift the target stack by 1 band to compare t and t+1 in parallel (vectorized)
+    stack_t = target_stack.select(target_band_names[:-1])
+    stack_t1 = target_stack.select(target_band_names[1:])
 
-    # 3. Calculate total changes across the timeline
+    # 4. Calculate total changes across the timeline
     change_count_img = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename(GLANCE_CLASS_BAND)
 
-    # 4. Mask using the global validity mask (must be valid across ALL years to preserve math integrity)
-    global_mask = image_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
     masked_change_count = change_count_img.updateMask(global_mask)
 
     # Unmask void/nodata pixels to NODATA_VALUE before export to differentiate from 0 (no change)
@@ -6245,23 +6266,33 @@ def export_global_overall_change_frequency_csv_gee(
     """
     print(f"Preparing Overall Change Frequency GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Build the stack using the robust, standard helper already defined in utils.py
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
+    )
+    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=NODATA_VALUE,
     )
 
-    # 2. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
-    stack_t = image_stack.select(band_names[:-1])
-    stack_t1 = image_stack.select(band_names[1:])
+    # 3. Shift the target stack by 1 band to compare t and t+1 in parallel (vectorized)
+    stack_t = target_stack.select(target_band_names[:-1])
+    stack_t1 = target_stack.select(target_band_names[1:])
 
-    # 3. Calculate total changes across the entire timeline
+    # 4. Calculate total changes across the entire timeline
     total_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename('num_changes')
 
-    # 4. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
-    global_mask = image_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
     total_changes_masked = total_changes.updateMask(global_mask)
 
     # 5. Compute the frequency histogram of the total changes for these pixels
