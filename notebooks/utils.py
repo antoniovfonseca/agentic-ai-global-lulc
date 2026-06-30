@@ -5530,7 +5530,10 @@ def calculate_trajectory_gee(
     stack_t1 = image_stack.select(band_names[1:]).rename(common_names)
 
     # 4. Check for a direct transition and path changes using native multi-band operations
-    has_direct_transition = stack_t.eq(start_img).And(stack_t1.eq(end_img)).reduce(ee.Reducer.max())
+    start_img_stack = ee.Image.cat([start_img] * len(common_names)).rename(common_names)
+    end_img_stack = ee.Image.cat([end_img] * len(common_names)).rename(common_names)
+
+    has_direct_transition = stack_t.eq(start_img_stack).And(stack_t1.eq(end_img_stack)).reduce(ee.Reducer.max())
     path_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum())
 
     # 5. Deduce all_match_start mathematically from path_changes (0 changes means completely stable)
