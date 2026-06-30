@@ -2086,8 +2086,12 @@ def plot_trajectory_contributions(
         axis="y",
         labelsize=18
     )
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=5))
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%d"))
+    ax.yaxis.set_major_locator(
+        ticker.MaxNLocator(
+            nbins=5,
+            integer=True,
+        ),
+    )
 
     # Spines visible, NO GRID
     for spine in ["top", "right", "left", "bottom"]:
