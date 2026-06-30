@@ -316,6 +316,8 @@ def export_global_pixel_counts_tasks(
         The Google Drive folder where the CSVs will be saved.
     scale : int, optional
         The scale in meters for the GEE reduction. Default is 30.
+    full_year_list : list of int, optional
+        The complete timeline to construct the consistent global validity mask.
     max_pixels : float, optional
         The maximum number of pixels to process. Default is 1e13.
     nodata_val : int, optional
@@ -329,15 +331,28 @@ def export_global_pixel_counts_tasks(
     glance_collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
     tasks_list = []
 
-    # 1. Build a global mask for pixels valid in all years
-    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
+    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
 
-    for year, image_year in yearly_images:
+    for i, year in enumerate(year_list):
+        image_year = target_stack.select(target_band_names[i]).rename(GLANCE_CLASS_BAND)
         image_masked = image_year.updateMask(global_mask)
 
         histogram = image_masked.reduceRegion(
@@ -407,7 +422,8 @@ def plot_pixel_counts_bar_chart(
         yearly_data = {}
         for file in csv_files:
             basename = os.path.basename(file)
-            match = re.search(r"(\d{4})", basename)
+            # Strict regex to avoid duplicate files like "(1).csv" or copy files
+            match = re.match(r"^Pixel_Counts_LULC_(\d{4})\.csv$", basename)
             if not match:
                 continue
             
@@ -5406,6 +5422,7 @@ def export_interval_transition_matrices_gee(
     band_name: str,
     scale: int = 300,
     nodata_val: int = 255,
+    full_year_list: list = None,
 ) -> list:
     """
     Export LULC transition matrices between consecutive years to Google Drive.
@@ -5422,6 +5439,8 @@ def export_interval_transition_matrices_gee(
         Band name representing the LULC classes.
     scale : int, optional
         Spatial resolution for the export, by default 300.
+    full_year_list : list of int, optional
+        The complete timeline to construct the consistent global validity mask.
     nodata_val : int, optional
         Value representing NoData/Background to be masked out, by default 255.
 
@@ -5432,7 +5451,20 @@ def export_interval_transition_matrices_gee(
     """
     tasks = []
 
-    global_mask, yearly_images = build_global_valid_mask_and_yearly_images(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
+    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=collection_id,
         band_name=band_name,
@@ -5440,8 +5472,8 @@ def export_interval_transition_matrices_gee(
     )
 
     yearly_by_year = {
-        year: image_year
-        for year, image_year in yearly_images
+        year: target_stack.select(target_band_names[idx]).rename(band_name)
+        for idx, year in enumerate(year_list)
     }
 
     for i in range(len(year_list) - 1):
