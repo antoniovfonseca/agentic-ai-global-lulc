@@ -5525,8 +5525,9 @@ def calculate_trajectory_gee(
     start_equals_end = start_img.eq(end_img)
 
     # 3. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
-    stack_t = image_stack.select(band_names[:-1])
-    stack_t1 = image_stack.select(band_names[1:])
+    common_names = [f"b_{i}" for i in range(len(band_names) - 1)]
+    stack_t = image_stack.select(band_names[:-1]).rename(common_names)
+    stack_t1 = image_stack.select(band_names[1:]).rename(common_names)
 
     # 4. Check for a direct transition and path changes using native multi-band operations
     has_direct_transition = stack_t.eq(start_img).And(stack_t1.eq(end_img)).reduce(ee.Reducer.max())
