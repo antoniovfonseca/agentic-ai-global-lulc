@@ -341,7 +341,8 @@ def export_global_pixel_counts_tasks(
         image_masked = image_year.updateMask(global_mask)
 
         histogram = image_masked.reduceRegion(
-            reducer=ee.Reducer.frequencyHistogram(),
+            # force unweighted reduction to guarantee integer pixel counts from GEE server
+            reducer=ee.Reducer.frequencyHistogram().unweighted(),
             geometry=GLOBAL_GEOM,
             scale=scale,
             maxPixels=max_pixels,
@@ -434,6 +435,8 @@ def plot_pixel_counts_bar_chart(
                 yearly_data,
                 orient='index'
             ).fillna(0)
+            # Round and convert to integer since we are counting discrete pixels
+            pivot_pixels = pivot_pixels.round(0).astype(int)
             pivot_pixels.sort_index(inplace=True)
             pivot_pixels.index.name = "Year"
             
