@@ -119,7 +119,7 @@ def build_global_valid_mask_and_yearly_images(
 
     # 2. Create the global mask from the stack, ensuring strict intersection
     # A pixel is valid only if it's not NODATA_VALUE in *all* bands of the stack.
-    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
 
     # 3. Prepare yearly_images, applying the global_mask to each original image
     yearly_images_masked = []
@@ -345,6 +345,7 @@ def export_global_pixel_counts_tasks(
             reducer=ee.Reducer.frequencyHistogram().unweighted(),
             geometry=GLOBAL_GEOM,
             scale=scale,
+            crs="EPSG:4326",
             maxPixels=max_pixels,
             tileScale=16
         )
@@ -703,7 +704,7 @@ def export_global_change_frequency_tasks(
     total_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename('num_changes')
 
     # 4. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
-    global_mask = image_stack.neq(NODATA_VALUE).reduce(ee.Reducer.min())
+    global_mask = image_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
     total_changes_masked = total_changes.updateMask(global_mask)
 
     tasks_list = []
@@ -725,6 +726,7 @@ def export_global_change_frequency_tasks(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=GLOBAL_GEOM,
             scale=scale,
+            crs="EPSG:4326",
             maxPixels=1e13,
             tileScale=16,
         ).get('num_changes')
@@ -1362,7 +1364,7 @@ def export_global_number_of_changes_raster_task(
     change_count_img = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename(GLANCE_CLASS_BAND)
 
     # 4. Mask using the global validity mask (must be valid across ALL years to preserve math integrity)
-    global_mask = image_stack.neq(NODATA_VALUE).reduce(ee.Reducer.min())
+    global_mask = image_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
     masked_change_count = change_count_img.updateMask(global_mask)
 
     # Unmask void/nodata pixels to NODATA_VALUE before export to differentiate from 0 (no change)
@@ -1838,6 +1840,7 @@ def export_trajectory_intervals_csv_gee(
         reducer=ee.Reducer.frequencyHistogram(),
         geometry=GLOBAL_GEOM,
         scale=scale,
+        crs="EPSG:4326",
         maxPixels=1e13,
         tileScale=16,
     )
@@ -2087,6 +2090,7 @@ def export_trajectory_overall_csv_gee(
         reducer=ee.Reducer.fixedHistogram(2, 6, 4),
         geometry=GLOBAL_GEOM,
         scale=scale,
+        crs="EPSG:4326",
         maxPixels=1e13,
         tileScale=16,
     ).get('trajectory')
@@ -4340,7 +4344,7 @@ def export_quantity_component_task_gee(
     quantity_image = start_img.neq(end_img).multiply(1).toByte()
 
     # 3. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
-    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
     quantity_image = quantity_image.updateMask(global_mask)
 
     # 4. Apply NoData unmasking and set properties
@@ -4607,7 +4611,7 @@ def export_alternation_exchange_task_gee(
     )
 
     # 2. Apply the global validity mask to all years to ensure strict alignment
-    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
     masked_stack = image_stack.updateMask(global_mask)
 
     # 3. Extract aligned yearly images
@@ -4928,7 +4932,7 @@ def export_alternation_shift_task_gee(
     )
 
     # 2. Apply the global validity mask to ensure strict alignment
-    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
     masked_stack = image_stack.updateMask(global_mask)
 
     # 3. Extract aligned yearly images
@@ -5340,7 +5344,7 @@ def calculate_trajectory_gee(
 
     # 13. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
     # Using a flat reducer on the clean stack to avoid graph recursion timeouts
-    global_mask = image_stack.neq(nodata_val).reduce(ee.Reducer.min())
+    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
     trajectory_image = trajectory_image.updateMask(global_mask)
 
     return trajectory_image.rename('trajectory')
@@ -5453,6 +5457,7 @@ def export_interval_transition_matrices_gee(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=GLOBAL_GEOM,
             scale=scale,
+            crs="EPSG:4326",
             maxPixels=1e13,
             tileScale=16,
         )
@@ -6199,7 +6204,7 @@ def export_global_overall_change_frequency_csv_gee(
     total_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename('num_changes')
 
     # 4. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
-    global_mask = image_stack.neq(NODATA_VALUE).reduce(ee.Reducer.min())
+    global_mask = image_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
     total_changes_masked = total_changes.updateMask(global_mask)
 
     # 5. Compute the frequency histogram of the total changes for these pixels
@@ -6207,6 +6212,7 @@ def export_global_overall_change_frequency_csv_gee(
         reducer=ee.Reducer.frequencyHistogram(),
         geometry=GLOBAL_GEOM,
         scale=scale,
+        crs="EPSG:4326",
         maxPixels=1e13,
         tileScale=16,
     ).get('num_changes')
