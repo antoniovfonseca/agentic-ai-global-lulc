@@ -699,6 +699,7 @@ def export_global_change_frequency_tasks(
     year_list: list,
     drive_folder: str,
     scale: int = 300,
+    full_year_list: list = None,
 ) -> list:
     """
     Triggers GEE tasks to calculate the frequency of pixel changes for each
@@ -1299,6 +1300,7 @@ def export_global_number_of_changes_raster_task(
     year_list: list[int],
     drive_folder: str,
     scale: int = 300,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Compute and save a raster representing the total number of class changes per pixel
@@ -1673,6 +1675,7 @@ def export_trajectory_task_gee(
     collection_id: str,
     band_name: str,
     nodata_val: int,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Generate the trajectory raster and submit an export task to Google Earth Engine.
@@ -1739,6 +1742,7 @@ def export_trajectory_intervals_csv_gee(
     year_list: list,
     drive_folder: str,
     scale: int = 300,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Compute trajectory interval contributions using GEE and export to CSV.
@@ -2008,6 +2012,7 @@ def export_trajectory_overall_csv_gee(
     year_list: list,
     drive_folder: str,
     scale: int = 300,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Compute overall trajectory contributions using GEE and export to CSV.
@@ -2622,6 +2627,7 @@ def export_unaccounted_extent_task_gee(
     drive_folder: str,
     scale: int = 300,
     nodata_val: int = NODATA_VALUE,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Computes the Unaccounted Extent component pixel-by-pixel within GEE
@@ -4301,6 +4307,7 @@ def export_quantity_component_task_gee(
     drive_folder: str,
     scale: int = 300,
     nodata_val: int = 255,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Compute and export a raster representing the Quantity Component of change using GEE.
@@ -4572,6 +4579,7 @@ def export_alternation_exchange_task_gee(
     drive_folder: str,
     scale: int = 300,
     nodata_val: int = 255,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Compute and export a raster representing the Alternation Exchange Component using GEE.
@@ -4892,6 +4900,7 @@ def export_alternation_shift_task_gee(
     drive_folder: str,
     scale: int = 300,
     nodata_val: int = NODATA_VALUE,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Compute and export a raster representing the Alternation Shift Component using GEE.
@@ -6173,6 +6182,7 @@ def export_global_overall_change_frequency_csv_gee(
     year_list: list,
     drive_folder: str,
     scale: int = 300,
+    full_year_list: list = None,
 ) -> ee.batch.Task:
     """
     Compute and export a single CSV representing the overall frequency of changes
