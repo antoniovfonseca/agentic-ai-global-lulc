@@ -2261,53 +2261,73 @@ def export_trajectory_overall_csv_gee(
 # ---------------------------------------------------------------------------
 def plot_trajectory_distribution(
     input_dir: str,
-    csv_filename: str,
-    total_pixels: float = None,
+    output_dir: str,
 ) -> None:
     """
-    Generate and save a stacked bar chart of trajectory class distributions.
-
-    Reads trajectory pixel counts from an exported GEE CSV file and
-    calculates percentages. If total_pixels is provided, it calculates
-    the percentage relative to the entire study area.
+    Generate and save a stacked bar chart of trajectory class distributions,
+    caching the consolidated data to a CSV file.
     """
-    csv_path = os.path.join(input_dir, csv_filename)
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+    tables_dir = os.path.join(output_dir, "tables")
+    consolidated_csv_path = os.path.join(tables_dir, "aggregated_trajectory_overall.csv")
+    consolidated_pixel_counts_path = os.path.join(tables_dir, "aggregated_pixel_counts.csv")
 
-    df = pd.read_csv(csv_path)
+    df_overall = None
 
-    # Extract counts for trajectory classes 2, 3, 4, 5
-    data_counts = {}
-    for col in ['2', '3', '4', '5']:
-        if col in df.columns:
-            data_counts[int(col)] = df[col].sum()
-        else:
-            data_counts[int(col)] = 0.0
+    # 1. Try to load from consolidated CSV first (cache)
+    if os.path.exists(consolidated_csv_path):
+        print(f"Loading consolidated overall trajectory from: {consolidated_csv_path}")
+        df_overall = pd.read_csv(consolidated_csv_path, index_col=0)
+        df_overall.columns = df_overall.columns.astype(str)
+    else:
+        # 2. Locate the raw Trajectory Overall CSV
+        search_pattern = os.path.join(input_dir, "Trajectory_Overall_*.csv")
+        csv_files = glob.glob(search_pattern)
 
-    # Calculate percentages
-    if total_pixels is None:
-        # Align the denominator with Pixel_Counts_LULC to represent the whole study area
+        if csv_files:
+            raw_csv_path = csv_files[0]
+            print(f"Processing raw overall trajectory from: {raw_csv_path}")
+            df_temp = pd.read_csv(raw_csv_path)
+
+            # Keep only columns representing valid trajectories 2, 3, 4, 5
+            cols_to_keep = [c for c in df_temp.columns if c.isdigit() and int(c) in [2, 3, 4, 5]]
+            df_overall = df_temp[cols_to_keep].copy()
+            
+            # Round and convert counts to strictly integer
+            df_overall = df_overall.round(0).astype(int)
+
+            # Save consolidated copy to tables/
+            os.makedirs(tables_dir, exist_ok=True)
+            df_overall.to_csv(consolidated_csv_path)
+            print(f"Consolidated overall trajectory saved to: {consolidated_csv_path}")
+
+    if df_overall is None or df_overall.empty:
+        print(f"No valid GEE CSV data found in {input_dir} and no consolidated CSV found at {consolidated_csv_path}")
+        return
+
+    # 3. Calculate total_pixels for percentage denominator
+    total_pixels = None
+    if os.path.exists(consolidated_pixel_counts_path):
+        print(f"Reading total study area from: {consolidated_pixel_counts_path}")
+        df_pixels = pd.read_csv(consolidated_pixel_counts_path, index_col="Year")
+        # Since all years are strictly masked to the same total, we can sum the first year's classes
+        total_pixels = df_pixels.iloc[0].sum()
+        print(f"-> Derived total valid pixels from cache: {total_pixels:,.0f}")
+    else:
+        # Fallback search of raw Pixel_Counts_LULC files
         pixel_count_files = glob.glob(os.path.join(input_dir, "Pixel_Counts_LULC_*.csv"))
         if pixel_count_files:
             first_file = pixel_count_files[0]
-            match = re.search(r"(\d{4})", os.path.basename(first_file))
-            target_year = match.group(1) if match else None
+            df_pixels = pd.read_csv(first_file)
+            num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c and c != '255']
+            total_pixels = df_pixels[num_cols_pixels].sum().sum()
+            print(f"-> Derived total valid pixels from raw CSV: {total_pixels:,.0f}")
 
-            year_files = [f for f in pixel_count_files if target_year and target_year in os.path.basename(f)]
-            if not year_files:
-                year_files = [first_file]
-
-            total_pixels = 0.0
-            for f in year_files:
-                df_pixels = pd.read_csv(f)
-                num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c]
-                total_pixels += df_pixels[num_cols_pixels].sum().sum()
-        else:
-            total_pixels = sum(data_counts.values())
+    if total_pixels is None or total_pixels == 0:
+        print("Warning: Could not determine total valid study area pixels. Defaulting to trajectory sum.")
+        total_pixels = df_overall.sum(axis=1).iloc[0]
 
     percentages = {
-        i: float((data_counts.get(i, 0) / total_pixels) * 100.0) if total_pixels > 0 else 0.0
+        i: float((df_overall[str(i)].iloc[0] / total_pixels) * 100.0) if str(i) in df_overall.columns else 0.0
         for i in [2, 3, 4, 5]
     }
 
@@ -2389,7 +2409,7 @@ def plot_trajectory_distribution(
 
     # Save the figure
     charts_dir = os.path.join(
-        input_dir,
+        output_dir,
         "charts"
     )
     os.makedirs(
