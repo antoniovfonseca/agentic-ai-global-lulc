@@ -865,6 +865,9 @@ def plot_global_change_frequency_bar_chart(
         df = pd.read_csv(consolidated_csv_path, index_col=0)
         df.columns = df.columns.astype(str)
         df = df.round(0).astype(int)
+        # Keep only columns that are positive integers (representing 1 or more changes)
+        valid_cols = [c for c in df.columns if c.isdigit() and int(c) > 0]
+        df = df[valid_cols]
     elif csv_files:
         records = {}
         for file_path in csv_files:
@@ -903,11 +906,11 @@ def plot_global_change_frequency_bar_chart(
                     new_cols[c] = str(c)
             df.rename(columns=new_cols, inplace=True)
 
-            # Remove stable pixels (0 changes) from stacked bars
-            if "0" in df.columns:
-                df = df.drop(columns=["0"])
+            # Keep only columns that are positive integers (representing 1 or more changes)
+            valid_cols = [c for c in df.columns if c.isdigit() and int(c) > 0]
+            df = df[valid_cols]
 
-            sorted_cols = sorted(df.columns, key=lambda x: int(x) if x.isdigit() else float('inf'))
+            sorted_cols = sorted(df.columns, key=lambda x: int(x))
             df = df[sorted_cols]
             df.sort_index(inplace=True)
             
