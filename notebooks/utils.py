@@ -36,15 +36,72 @@ NODATA_VALUE = 255
 GLANCE_COLLECTION_ID = "projects/GLANCE/DATASETS/V001"
 GLANCE_CLASS_BAND = "LC"
 
-# Current bounding box geometry (configured for Africa - AF)
-GLOBAL_GEOM = ee.Geometry.Rectangle(
-    [-26.0, -35.0, 52.0, 38.0],
-    "EPSG:4326",
-    False,
-)
+# --- CENTRALIZED GLANCE REGIONS DATABASE ---
+GLANCE_REGIONS_REGISTRY = {
+    'EU': {
+        'geom': [-25.0, 34.0, 45.0, 72.0],
+        'ul_xy': (-5505560.00, 3346245.0),
+        'center_lon': 20,
+        'center_lat': 55
+    },
+    'AN': {
+        'geom': [-180.0, -90.0, 180.0, -60.0],
+        'ul_xy': (-3662210.00, 5169375.0),
+        'center_lon': 0,
+        'center_lat': -90
+    },
+    'AF': {
+        'geom': [-26.0, -35.0, 52.0, 38.0],
+        'ul_xy': (-5312270.00, 3707205.0),
+        'center_lon': 20,
+        'center_lat': 5
+    },
+    'SA': {
+        'geom': [-90.0, -56.0, -30.0, 15.0],
+        'ul_xy': (-6918770.00, 4899705.0),
+        'center_lon': -60,
+        'center_lat': -15
+    },
+    'AS': {
+        'geom': [25.0, 1.0, 180.0, 77.0],
+        'ul_xy': (-4805840.00, 5190735.0),
+        'center_lon': 100,
+        'center_lat': 45
+    },
+    'NA': {
+        'geom': [-170.0, 15.0, -50.0, 85.0],
+        'ul_xy': (-7633670.00, 5076465.0),
+        'center_lon': -100,
+        'center_lat': 50
+    },
+    'OC': {
+        'geom': [110.0, -50.0, 180.0, 0.0],
+        'ul_xy': (-6961010.00, 4078425.0),
+        'center_lon': 135,
+        'center_lat': -15
+    }
+}
 
-# GLanCE official WKT projection system (configured for Africa - AF)
-GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AF - V01",
+# --- ACTIVE REGION CONFIGURATION ---
+# Simply change this string or uncomment the region you want to process!
+ACTIVE_REGION = 'EU'          # Europe (2,052 tiles)
+# ACTIVE_REGION = 'AN'        # Antarctica (3,472 tiles)
+# ACTIVE_REGION = 'AF'        # Africa (4,440 tiles)
+# ACTIVE_REGION = 'SA'        # South America (5,032 tiles)
+# ACTIVE_REGION = 'AS'        # Asia (5,082 tiles)
+# ACTIVE_REGION = 'NA'        # North America (5,376 tiles)
+# ACTIVE_REGION = 'OC'        # Oceania (8,814 tiles)
+
+# Fetch configuration data for the active region
+_config = GLANCE_REGIONS_REGISTRY[ACTIVE_REGION]
+
+# Global variables automatically populated based on your ACTIVE_REGION choice
+GLOBAL_GEOM = ee.Geometry.Rectangle(_config['geom'], "EPSG:4326", False)
+GLANCE_RESOLUTION = [30, 30]
+GLANCE_UL_XY = _config['ul_xy']
+
+# Dynamically generated WKT projection system
+GLANCE_CRS_WKT = f"""PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - {ACTIVE_REGION} - V01",
     GEOGCS["GCS_WGS_1984",
         DATUM["D_WGS_1984",
             SPHEROID["WGS_1984",6378137.0,298.257223563]],
@@ -53,13 +110,9 @@ GLANCE_CRS_WKT = """PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - AF - V01"
     PROJECTION["Lambert_Azimuthal_Equal_Area"],
     PARAMETER["false_easting",0.0],
     PARAMETER["false_northing",0.0],
-    PARAMETER["longitude_of_center",20],
-    PARAMETER["latitude_of_center",5],
+    PARAMETER["longitude_of_center",{_config['center_lon']}],
+    PARAMETER["latitude_of_center",{_config['center_lat']}],
     UNIT["meter",1.0]]"""
-
-# GLanCE Grid parameters for custom clipping/exporting (configured for Africa - AF)
-GLANCE_RESOLUTION = [30, 30]
-GLANCE_UL_XY = (-5312270.00, 3707205.0)
 
 # 3. Class Metadata
 GLANCE_METADATA = {
