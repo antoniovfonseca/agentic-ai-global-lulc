@@ -2092,6 +2092,13 @@ def plot_trajectory_contributions(
             integer=True,
         ),
     )
+    max_scaled_val = df_scaled.sum(axis=1).max()
+    ax.yaxis.set_major_locator(
+        ticker.MaxNLocator(
+            nbins=5,
+            integer=max_scaled_val >= 5,
+        ),
+    )
 
     # Spines visible, NO GRID
     for spine in ["top", "right", "left", "bottom"]:
