@@ -2210,20 +2210,20 @@ def export_trajectory_overall_csv_gee(
     trajectory_image = trajectory_image.updateMask(valid_traj_mask)
 
     # 4. Use frequencyHistogram for robust, error-free categorical counts
-    hist = trajectory_image.reduceRegion(
+    histograms = trajectory_image.reduceRegion(
         reducer=ee.Reducer.frequencyHistogram().unweighted(),
         geometry=GLOBAL_GEOM,
         scale=scale,
         crs="EPSG:4326",
         maxPixels=1e13,
         tileScale=16,
-    ).get('trajectory')
+    )
 
     y_start = str(year_list[0])
     y_end = str(year_list[-1])
     period_label = f"{y_start}-{y_end}"
 
-    hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
+    hist_dict = ee.Dictionary(histograms.get('trajectory', ee.Dictionary()))
 
     # 5. Format into a Feature
     feature = ee.Feature(None, {
