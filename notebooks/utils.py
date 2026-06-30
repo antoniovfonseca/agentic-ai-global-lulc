@@ -2209,9 +2209,9 @@ def export_trajectory_overall_csv_gee(
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
     trajectory_image = trajectory_image.updateMask(valid_traj_mask)
 
-    # 4. Use fixedHistogram for high performance static binning instead of dynamic frequencyHistogram
+    # 4. Use frequencyHistogram for robust, error-free categorical counts
     hist = trajectory_image.reduceRegion(
-        reducer=ee.Reducer.fixedHistogram(2, 6, 4).unweighted(),
+        reducer=ee.Reducer.frequencyHistogram().unweighted(),
         geometry=GLOBAL_GEOM,
         scale=scale,
         crs="EPSG:4326",
@@ -2223,17 +2223,15 @@ def export_trajectory_overall_csv_gee(
     y_end = str(year_list[-1])
     period_label = f"{y_start}-{y_end}"
 
-    # Convert fixedHistogram array to standard count values server-side
-    hist_array = ee.Array(ee.Algorithms.If(hist, hist, ee.Array([[2, 0], [3, 0], [4, 0], [5, 0]])))
-    counts = hist_array.slice(1, 1, 2).project([0]).toList()
+    hist_dict = ee.Dictionary(ee.Algorithms.If(hist, hist, {}))
 
     # 5. Format into a Feature
     feature = ee.Feature(None, {
         'Period': period_label,
-        '2': ee.Number(counts.get(0)),
-        '3': ee.Number(counts.get(1)),
-        '4': ee.Number(counts.get(2)),
-        '5': ee.Number(counts.get(3)),
+        '2': ee.Number(hist_dict.get('2', 0)),
+        '3': ee.Number(hist_dict.get('3', 0)),
+        '4': ee.Number(hist_dict.get('4', 0)),
+        '5': ee.Number(hist_dict.get('5', 0)),
     })
 
     fc = ee.FeatureCollection([feature])
