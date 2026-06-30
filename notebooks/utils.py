@@ -1846,33 +1846,31 @@ def export_trajectory_intervals_csv_gee(
     """
     Compute trajectory interval contributions using GEE and export to CSV.
     Returns pixel counts instead of area.
-
-    Parameters
-    ----------
-    year_list : list
-        List of integer years to process.
-    drive_folder : str
-        The destination folder in Google Drive.
-    scale : int, optional
-        The spatial resolution for the export in meters. Default is 300.
-        
-    Returns
-    -------
-    ee.batch.Task
-        The submitted Earth Engine task object.
     """
     print(f"Preparing Trajectory Contributions GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Build the stack (returns the image stack and band names)
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
+    )
+    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
-        nodata_val=NODATA_VALUE
+        nodata_val=NODATA_VALUE,
     )
     
-    # 2. Calculate trajectory
-    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
+    # 3. Calculate trajectory using the consistent global mask
+    trajectory_image = calculate_trajectory_gee(target_stack, target_band_names, global_mask, NODATA_VALUE)
 
     # 3. Filter valid trajectories (we only care about 2, 3, 4, 5)
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
@@ -1954,24 +1952,74 @@ def export_trajectory_intervals_csv_gee(
 # 5.3 PLOT TRAJECTORY DURING INTERVALS
 # ---------------------------------------------------------------------------
 def plot_trajectory_contributions(
-    df: pd.DataFrame,
-    output_path: str,
+    input_dir: str,
+    output_dir: str,
 ) -> None:
     """
-    Create stacked bar chart for trajectory contributions per interval.
+    Create stacked bar chart for trajectory contributions per interval,
+    caching the aggregated data to a consolidated CSV file.
 
     Parameters
     ----------
-    df : pd.DataFrame
-        DataFrame with intervals as index and trajectory IDs (2, 3, 4, 5) as columns.
-    output_path : str
-        Path to output directory for saving figure.
+    input_dir : str
+        Directory path containing the raw 'Trajectory_Contributions_*.csv' files.
+    output_dir : str
+        Directory path where output tables and charts will be saved.
     """
-    # 0. Ensure columns are integers to match logic
-    df = df.copy()
+    tables_dir = os.path.join(output_dir, "tables")
+    consolidated_csv_path = os.path.join(tables_dir, "aggregated_trajectory_contributions.csv")
+
+    df = None
+
+    # 1. Try to load from consolidated CSV first (cache)
+    if os.path.exists(consolidated_csv_path):
+        print(f"Loading consolidated trajectory contributions from: {consolidated_csv_path}")
+        df = pd.read_csv(consolidated_csv_path, index_col="Interval")
+    else:
+        # 2. Locate the raw Trajectory Contributions CSV
+        search_pattern = os.path.join(input_dir, "Trajectory_Contributions_*.csv")
+        csv_files = glob.glob(search_pattern)
+
+        if csv_files:
+            raw_csv_path = csv_files[0]
+            print(f"Processing raw trajectory contributions from: {raw_csv_path}")
+            df_temp = pd.read_csv(raw_csv_path)
+
+            # Set 'Interval' as index if present, else fallback
+            interval_col = None
+            for col in df_temp.columns:
+                if col.lower() == 'interval':
+                    interval_col = col
+                    break
+            
+            if interval_col:
+                df_temp.set_index(interval_col, inplace=True)
+            else:
+                non_num_cols = df_temp.select_dtypes(exclude=['number']).columns
+                if len(non_num_cols) > 0:
+                    df_temp.set_index(non_num_cols[0], inplace=True)
+                    df_temp.index.name = "Interval"
+
+            # Keep only columns representing valid trajectories 2, 3, 4, 5
+            cols_to_keep = [c for c in df_temp.columns if c.isdigit() and int(c) in [2, 3, 4, 5]]
+            df = df_temp[cols_to_keep].copy()
+            
+            # Round and convert counts to strictly integer
+            df = df.round(0).astype(int)
+
+            # Save consolidated copy to tables/
+            os.makedirs(tables_dir, exist_ok=True)
+            df.to_csv(consolidated_csv_path)
+            print(f"Consolidated trajectory contributions saved to: {consolidated_csv_path}")
+
+    if df is None or df.empty:
+        print(f"No valid GEE CSV data found in {input_dir} and no consolidated CSV found at {consolidated_csv_path}")
+        return
+
+    # Ensure columns are integers to match plotting logic
     df.columns = df.columns.astype(int)
 
-    # 1. Calculate the maximum value to determine scale factor
+    # Calculate the maximum value to determine scale factor
     max_val = df.sum(axis=1).max()
 
     if max_val >= 1_000_000_000_000:
@@ -2082,7 +2130,7 @@ def plot_trajectory_contributions(
 
     # 7. Save figure
     charts_dir = os.path.join(
-        output_path,
+        output_dir,
         "charts"
     )
     os.makedirs(
@@ -2130,16 +2178,28 @@ def export_trajectory_overall_csv_gee(
     ee.batch.Task
         The submitted Earth Engine task object.
     """
-    # 1. Build the stack (returns the image stack and band names)
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
+    )
+    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
-        nodata_val=NODATA_VALUE
+        nodata_val=NODATA_VALUE,
     )
     
-    # 2. Calculate overall trajectory
-    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
+    # 3. Calculate overall trajectory using the consistent global mask
+    trajectory_image = calculate_trajectory_gee(target_stack, target_band_names, global_mask, NODATA_VALUE)
 
     # 3. Filter valid trajectories (we only care about 2, 3, 4, 5)
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
@@ -4467,6 +4527,7 @@ def export_quantity_component_task_gee(
         scale=scale,
         region=GLOBAL_GEOM,
         maxPixels=1e13,
+        crs="EPSG:4326",
     )
 
     # 6. Start the export task
