@@ -2211,7 +2211,7 @@ def export_trajectory_overall_csv_gee(
 
     # 4. Use fixedHistogram for high performance static binning instead of dynamic frequencyHistogram
     hist = trajectory_image.reduceRegion(
-        reducer=ee.Reducer.fixedHistogram(2, 6, 4),
+        reducer=ee.Reducer.fixedHistogram(2, 6, 4).unweighted(),
         geometry=GLOBAL_GEOM,
         scale=scale,
         crs="EPSG:4326",
@@ -2856,6 +2856,7 @@ def export_unaccounted_extent_task_gee(
         reducer=ee.Reducer.frequencyHistogram().unweighted(),
         geometry=GLOBAL_GEOM,
         scale=scale,
+        crs="EPSG:4326",
         maxPixels=1e13,
         tileScale=16,
     ).get('transition')
