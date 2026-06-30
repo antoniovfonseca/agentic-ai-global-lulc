@@ -1127,55 +1127,80 @@ def plot_number_of_changes_distribution(
     This function calculates the percentage of unique pixels that underwent
     1, 2, 3, or N total changes relative to the ENTIRE valid study area.
     """
-    # 1. Locate the Number of Changes Raster in the directory structure
-    raster_patterns = [
-        os.path.join(input_dir, "rasters", "Number_of_Changes_Raster_*.tif"),
-        os.path.join(input_dir, "Number_of_Changes_Raster_*.tif"),
-        os.path.join(output_dir, "rasters", "Number_of_Changes_Raster_*.tif"),
-        os.path.join(output_dir, "Number_of_Changes_Raster_*.tif"),
-    ]
-    
-    raster_path = None
-    for pattern in raster_patterns:
-        matches = glob.glob(pattern, recursive=True)
-        if matches:
-            raster_path = matches[0]
-            break
-            
-    if not raster_path:
-        # Fallback broader search
-        matches = glob.glob(os.path.join(input_dir, "**/*Number_of_Changes_Raster*.tif"), recursive=True)
-        if matches:
-            raster_path = matches[0]
+    tables_dir = os.path.join(output_dir, "tables")
+    consolidated_csv_path = os.path.join(tables_dir, "aggregated_overall_change_frequency.csv")
 
-    if not raster_path:
-        print(f"Error: Could not find Number_of_Changes_Raster_*.tif in {input_dir} or {output_dir}.")
-        return
+    df_counts = None
 
-    print(f"Loading overall change frequency directly from raster: {raster_path}")
+    # 1. Try to load from consolidated CSV first (cache)
+    if os.path.exists(consolidated_csv_path):
+        print(f"Loading consolidated overall change frequency from: {consolidated_csv_path}")
+        df_counts = pd.read_csv(consolidated_csv_path, index_col="Number_of_Changes")
+        df_counts['Count'] = df_counts['Count'].astype(int)
+    else:
+        # 2. If not in cache, locate the Number of Changes Raster
+        raster_patterns = [
+            os.path.join(input_dir, "rasters", "Number_of_Changes_Raster_*.tif"),
+            os.path.join(input_dir, "Number_of_Changes_Raster_*.tif"),
+            os.path.join(output_dir, "rasters", "Number_of_Changes_Raster_*.tif"),
+            os.path.join(output_dir, "Number_of_Changes_Raster_*.tif"),
+        ]
+        
+        raster_path = None
+        for pattern in raster_patterns:
+            matches = glob.glob(pattern, recursive=True)
+            if matches:
+                raster_path = matches[0]
+                break
+                
+        if not raster_path:
+            # Fallback broader search
+            matches = glob.glob(os.path.join(input_dir, "**/*Number_of_Changes_Raster*.tif"), recursive=True)
+            if matches:
+                raster_path = matches[0]
 
-    # 2. Read raster and compute unique counts in memory-efficient chunks to avoid OOM crash
-    data_counts = {}
-    with rasterio.open(raster_path) as src:
-        nodata = src.nodata if src.nodata is not None else nodata_val
-        for _, window in src.block_windows():
-            chunk = src.read(1, window=window)
-            valid_pixels = chunk[chunk != nodata]
-            if valid_pixels.size > 0:
-                vals, counts = np.unique(valid_pixels, return_counts=True)
-                for v, c in zip(vals, counts):
-                    v_int = int(v)
-                    data_counts[v_int] = data_counts.get(v_int, 0) + int(c)
+        if not raster_path:
+            print(f"Error: Could not find Number_of_Changes_Raster_*.tif in {input_dir} or {output_dir}.")
+            return
 
-    total_study_area_pixels = sum(data_counts.values())
+        print(f"Loading overall change frequency directly from raster: {raster_path}")
+
+        # 3. Read raster and compute unique counts in memory-efficient chunks
+        data_counts_dict = {}
+        with rasterio.open(raster_path) as src:
+            nodata = src.nodata if src.nodata is not None else nodata_val
+            for _, window in src.block_windows():
+                chunk = src.read(1, window=window)
+                valid_pixels = chunk[chunk != nodata]
+                if valid_pixels.size > 0:
+                    vals, counts = np.unique(valid_pixels, return_counts=True)
+                    for v, c in zip(vals, counts):
+                        v_int = int(v)
+                        data_counts_dict[v_int] = data_counts_dict.get(v_int, 0) + int(c)
+
+        if not data_counts_dict:
+            print("Error: No valid data found in the raster to compute overall change frequency.")
+            return
+
+        df_counts = pd.DataFrame.from_dict(data_counts_dict, orient='index', columns=['Count'])
+        df_counts.index.name = "Number_of_Changes"
+        df_counts.sort_index(inplace=True)
+
+        # Save consolidated data to CSV
+        os.makedirs(tables_dir, exist_ok=True)
+        df_counts.to_csv(consolidated_csv_path)
+        print(f"Consolidated overall change frequency saved to: {consolidated_csv_path}")
+
+    # 4. Calculate percentages relative to the entire study area (excluding 0)
+    total_study_area_pixels = df_counts['Count'].sum()
 
     if total_study_area_pixels == 0:
-        print("Error: No valid study area pixels found in the raster.")
+        print("Error: No valid study area pixels found for overall change frequency.")
         return
 
-    # 3. Calculate percentages relative to the entire study area (excluding 0)
     percentages = {}
-    for n_changes, count in data_counts.items():
+    for n_changes, row in df_counts.iterrows():
+        count = row['Count']
         n_changes_int = int(n_changes)
         if n_changes_int == 0:
             continue  # Exclude stable pixels (0 changes) from being plotted
@@ -1865,8 +1890,8 @@ def export_trajectory_intervals_csv_gee(
         y_end = year_list[i + 1]
         band_label = f"i_{y_start}_{y_end}"
         
-        img1 = image_stack.select(band_names[i])
-        img2 = image_stack.select(band_names[i + 1])
+        img1 = target_stack.select(target_band_names[i]).rename(GLANCE_CLASS_BAND)
+        img2 = target_stack.select(target_band_names[i + 1]).rename(GLANCE_CLASS_BAND)
         change_mask = img1.neq(img2)
         
         traj_for_interval = trajectory_image.updateMask(change_mask).rename(band_label)
@@ -2714,23 +2739,35 @@ def export_unaccounted_extent_task_gee(
     """
     print(f"Preparing Unaccounted Extent GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Build the stack using the robust, standard helper already defined in utils.py
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
+    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
 
-    # 2. Calculate the standard trajectory classification
-    trajectory_image = calculate_trajectory_gee(image_stack, band_names)
+    # 3. Calculate the standard trajectory classification using the consistent global mask
+    trajectory_image = calculate_trajectory_gee(target_stack, target_band_names, global_mask, nodata_val)
 
     # 3. Mask is Trajectory 5 (which mathematically represents the Unaccounted Extent!)
     unaccounted_mask = trajectory_image.eq(5)
 
     # 4. Get start and end images
-    start_img = image_stack.select(band_names[0])
-    end_img = image_stack.select(band_names[-1])
+    start_img = target_stack.select(target_band_names[0]).rename(GLANCE_CLASS_BAND)
+    end_img = target_stack.select(target_band_names[-1]).rename(GLANCE_CLASS_BAND)
 
     # 5. Create the transition code image masked to Trajectory 5
     unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
@@ -4391,22 +4428,33 @@ def export_quantity_component_task_gee(
     """
     Compute and export a raster representing the Quantity Component of change using GEE.
     """
-    # 1. Build the stack using the robust, standard helper already defined in utils.py
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
+    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
 
-    start_img = image_stack.select(band_names[0])
-    end_img = image_stack.select(band_names[-1])
+    start_img = target_stack.select(target_band_names[0]).rename(GLANCE_CLASS_BAND)
+    end_img = target_stack.select(target_band_names[-1]).rename(GLANCE_CLASS_BAND)
 
     # 2. Compute Quantity Component: 1 if start != end, else 0
     quantity_image = start_img.neq(end_img).multiply(1).toByte()
 
     # 3. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
-    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
     quantity_image = quantity_image.updateMask(global_mask)
 
     # 4. Apply NoData unmasking and set properties
@@ -4665,20 +4713,31 @@ def export_alternation_exchange_task_gee(
     """
     print(f"Preparing Alternation Exchange GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Build the stack using the robust, standard helper already defined in utils.py
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
+    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
 
-    # 2. Apply the global validity mask to all years to ensure strict alignment
-    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
-    masked_stack = image_stack.updateMask(global_mask)
+    # 3. Apply the global validity mask to all years to ensure strict alignment
+    masked_stack = target_stack.updateMask(global_mask)
 
-    # 3. Extract aligned yearly images
-    imgs = [masked_stack.select(b) for b in band_names]
+    # 4. Extract aligned yearly images
+    imgs = [masked_stack.select(b).rename(GLANCE_CLASS_BAND) for b in target_band_names]
 
     # 2. Get unique classes from metadata
     # Note: GLANCE_METADATA must be defined in utils.py
@@ -4987,20 +5046,31 @@ def export_alternation_shift_task_gee(
     """
     print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
 
-    # 1. Build the stack using the robust, standard helper already defined in utils.py
-    image_stack, band_names = build_glance_stack(
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=nodata_val,
+    )
+    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
         year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
 
-    # 2. Apply the global validity mask to ensure strict alignment
-    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
-    masked_stack = image_stack.updateMask(global_mask)
+    # 3. Apply the global validity mask to ensure strict alignment
+    masked_stack = target_stack.updateMask(global_mask)
 
-    # 3. Extract aligned yearly images
-    imgs = [masked_stack.select(b) for b in band_names]
+    # 4. Extract aligned yearly images
+    imgs = [masked_stack.select(b).rename(GLANCE_CLASS_BAND) for b in target_band_names]
 
     # 4. Calculate Total Changes across all intervals
     total_changes = ee.Image(0).toUint8()
@@ -5406,9 +5476,7 @@ def calculate_trajectory_gee(
     # 12. Combine all trajectory maps into a single output image
     trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
 
-    # 13. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
-    # Using a flat reducer on the clean stack to avoid graph recursion timeouts
-    global_mask = image_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+    # 13. Apply the global validity mask
     trajectory_image = trajectory_image.updateMask(global_mask)
 
     return trajectory_image.rename('trajectory')
