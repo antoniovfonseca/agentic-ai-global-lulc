@@ -299,7 +299,7 @@ def export_global_pixel_counts_tasks(
     scale: int = 30,
     max_pixels: float = 1e13,
     nodata_val: int = NODATA_VALUE,
-
+    full_year_list: list = None,
 ) -> list:
     """
     Triggers GEE tasks to calculate pixel counts for global GLANCE images.
