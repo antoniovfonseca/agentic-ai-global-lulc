@@ -5497,17 +5497,21 @@ def calculate_trajectory_gee(
     ee.Image
         An ee.Image containing the classified trajectory codes (1 to 5).
     """
+    # 0. Apply the global validity mask to the image stack at the very beginning
+    # This ensures all subsequent operations work on a consistent set of valid pixels.
+    masked_image_stack = image_stack.updateMask(global_mask)
+
     # 1. Extract the start and end images from the stack
-    start_img = image_stack.select(band_names[0])
-    end_img = image_stack.select(band_names[-1])
+    start_img = masked_image_stack.select(band_names[0])
+    end_img = masked_image_stack.select(band_names[-1])
 
     # 2. Check if the start class equals the end class
     start_equals_end = start_img.eq(end_img)
 
     # 3. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
     common_names = [f"b_{i}" for i in range(len(band_names) - 1)]
-    stack_t = image_stack.select(band_names[:-1]).rename(common_names)
-    stack_t1 = image_stack.select(band_names[1:]).rename(common_names)
+    stack_t = masked_image_stack.select(band_names[:-1]).rename(common_names)
+    stack_t1 = masked_image_stack.select(band_names[1:]).rename(common_names)
 
     # 4. Check for a direct transition and path changes using native multi-band operations
     start_img_stack = ee.Image.cat([start_img] * len(common_names)).rename(common_names)
@@ -5541,7 +5545,7 @@ def calculate_trajectory_gee(
     trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
 
     # 13. Apply the global validity mask
-    trajectory_image = trajectory_image.updateMask(global_mask)
+    # The global_mask is already applied to the stack, so this final mask is redundant.
 
     return trajectory_image.rename('trajectory')
 
