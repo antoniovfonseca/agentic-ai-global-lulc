@@ -2299,13 +2299,25 @@ def plot_trajectory_distribution(
         print(f"No valid GEE CSV data found in {input_dir} and no consolidated CSV found at {consolidated_csv_path}")
         return
 
-    # 3. Calculate denominator dynamically from all trajectories (1 to 5)
-    # This represents 100% of the active study area (excluding NoData)
-    total_pixels = df_overall.sum(axis=1).iloc[0]
-    print(f"-> Derived total active study area from overall trajectory: {total_pixels:,.0f} pixels")
+    # 3. Establish the absolute universal denominator (consistent with Number of Changes)
+    total_pixels = None
+    if os.path.exists(consolidated_pixel_counts_path):
+        print(f"Reading universal study area denominator from: {consolidated_pixel_counts_path}")
+        df_pixels = pd.read_csv(consolidated_pixel_counts_path, index_col="Year")
+        # Sum all classes of the first year to get the absolute stable denominator of the study area
+        total_pixels = df_pixels.iloc[0].sum()
+        print(f"-> Derived universal denominator from pixel counts: {total_pixels:,.0f} pixels")
+    else:
+        # Fallback to the dynamic sum of the trajectory table if the main counts file is missing
+        total_pixels = df_overall.sum(axis=1).iloc[0]
+        print(f"Warning: Universal denominator not found. Defaulting to local sum: {total_pixels:,.0f} pixels")
+
+    # Ensure only strict numeric columns for trajectories are used to avoid text concatenation
+    traj_cols = [c for c in df_overall.columns if c.isdigit() and int(c) in [1, 2, 3, 4, 5]]
+    df_numeric = df_overall[traj_cols].copy()
 
     percentages = {
-        i: float((df_overall[str(i)].iloc[0] / total_pixels) * 100.0) if str(i) in df_overall.columns else 0.0
+        i: float((df_numeric[str(i)].iloc[0] / total_pixels) * 100.0) if str(i) in df_numeric.columns else 0.0
         for i in [2, 3, 4, 5]
     }
 
