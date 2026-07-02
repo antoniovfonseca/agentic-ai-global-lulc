@@ -5517,7 +5517,7 @@ def calculate_trajectory_gee(
     start_img_stack = ee.Image.cat([start_img] * len(common_names)).rename(common_names)
     end_img_stack = ee.Image.cat([end_img] * len(common_names)).rename(common_names)
 
-    has_direct_transition = stack_t.eq(start_img_stack).And(stack_t1.eq(end_img_stack)).reduce(ee.Reducer.max())
+    has_direct_transition = stack_t.eq(start_img_stack).And(stack_t1.eq(end_img_stack)).unmask(0).reduce(ee.Reducer.max())
     path_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum())
 
     # 5. Deduce all_match_start mathematically from path_changes (0 changes means completely stable)
