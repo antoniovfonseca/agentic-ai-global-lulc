@@ -2205,11 +2205,7 @@ def export_trajectory_overall_csv_gee(
     # 3. Calculate overall trajectory using the consistent global mask
     trajectory_image = calculate_trajectory_gee(target_stack, target_band_names, global_mask, NODATA_VALUE)
 
-    # 3. Filter valid trajectories (we only care about 2, 3, 4, 5)
-    valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
-    trajectory_image = trajectory_image.updateMask(valid_traj_mask)
-
-    # 4. Use frequencyHistogram for robust, error-free categorical counts
+    # 4. Use frequencyHistogram to get counts for ALL categories (including 1) for a consistent denominator
     histograms = trajectory_image.reduceRegion(
         reducer=ee.Reducer.frequencyHistogram().unweighted(),
         geometry=GLOBAL_GEOM,
@@ -2228,6 +2224,7 @@ def export_trajectory_overall_csv_gee(
     # 5. Format into a Feature
     feature = ee.Feature(None, {
         'Period': period_label,
+        '1': ee.Number(hist_dict.get('1', 0)),
         '2': ee.Number(hist_dict.get('2', 0)),
         '3': ee.Number(hist_dict.get('3', 0)),
         '4': ee.Number(hist_dict.get('4', 0)),
@@ -2286,8 +2283,8 @@ def plot_trajectory_distribution(
             print(f"Processing raw overall trajectory from: {raw_csv_path}")
             df_temp = pd.read_csv(raw_csv_path)
 
-            # Keep only columns representing valid trajectories 2, 3, 4, 5
-            cols_to_keep = [c for c in df_temp.columns if c.isdigit() and int(c) in [2, 3, 4, 5]]
+            # Keep columns representing all trajectories 1, 2, 3, 4, 5
+            cols_to_keep = [c for c in df_temp.columns if c.isdigit() and int(c) in [1, 2, 3, 4, 5]]
             df_overall = df_temp[cols_to_keep].copy()
             
             # Round and convert counts to strictly integer
@@ -2302,27 +2299,10 @@ def plot_trajectory_distribution(
         print(f"No valid GEE CSV data found in {input_dir} and no consolidated CSV found at {consolidated_csv_path}")
         return
 
-    # 3. Calculate total_pixels for percentage denominator
-    total_pixels = None
-    if os.path.exists(consolidated_pixel_counts_path):
-        print(f"Reading total study area from: {consolidated_pixel_counts_path}")
-        df_pixels = pd.read_csv(consolidated_pixel_counts_path, index_col="Year")
-        # Since all years are strictly masked to the same total, we can sum the first year's classes
-        total_pixels = df_pixels.iloc[0].sum()
-        print(f"-> Derived total valid pixels from cache: {total_pixels:,.0f}")
-    else:
-        # Fallback search of raw Pixel_Counts_LULC files
-        pixel_count_files = glob.glob(os.path.join(input_dir, "Pixel_Counts_LULC_*.csv"))
-        if pixel_count_files:
-            first_file = pixel_count_files[0]
-            df_pixels = pd.read_csv(first_file)
-            num_cols_pixels = [c for c in df_pixels.select_dtypes(include=['number']).columns if 'system' not in c and c != '255']
-            total_pixels = df_pixels[num_cols_pixels].sum().sum()
-            print(f"-> Derived total valid pixels from raw CSV: {total_pixels:,.0f}")
-
-    if total_pixels is None or total_pixels == 0:
-        print("Warning: Could not determine total valid study area pixels. Defaulting to trajectory sum.")
-        total_pixels = df_overall.sum(axis=1).iloc[0]
+    # 3. Calculate denominator dynamically from all trajectories (1 to 5)
+    # This represents 100% of the active study area (excluding NoData)
+    total_pixels = df_overall.sum(axis=1).iloc[0]
+    print(f"-> Derived total active study area from overall trajectory: {total_pixels:,.0f} pixels")
 
     percentages = {
         i: float((df_overall[str(i)].iloc[0] / total_pixels) * 100.0) if str(i) in df_overall.columns else 0.0
