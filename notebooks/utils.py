@@ -2216,28 +2216,36 @@ def export_trajectory_overall_csv_gee(
     ee.batch.Task
         The submitted Earth Engine task object.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     if full_year_list is None:
         full_year_list = year_list
 
-    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
-    full_stack, _ = build_glance_stack(
-        year_list=full_year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=NODATA_VALUE,
-    )
-    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+    # 1. Combine lists to build a single stack containing all required years safely
+    combined_years = sorted(list(set(year_list) | set(full_year_list)))
 
-    # 2. Build target stack for the specific years we want to export tasks for
-    target_stack, target_band_names = build_glance_stack(
-        year_list=year_list,
+    # 2. Build the master stack and extract the global mask based on the FULL timeline
+    master_stack, master_band_names = build_glance_stack(
+        year_list=combined_years,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=NODATA_VALUE,
     )
     
+    # Create the global validity mask strictly using full_year_list bands
+    full_year_bands = [f"y{y}" for y in full_year_list]
+    full_stack_subset = master_stack.select(full_year_bands)
+    global_mask = full_stack_subset.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # Build target bands list for trajectory calculation
+    target_band_names = [f"y{y}" for y in year_list]
+    
     # 3. Calculate overall trajectory using the consistent global mask
-    trajectory_image = calculate_trajectory_gee(target_stack, target_band_names, global_mask, NODATA_VALUE)
+    trajectory_image = calculate_trajectory_gee(master_stack, target_band_names, global_mask, NODATA_VALUE)
 
     # 4. Use frequencyHistogram to get counts for ALL categories (including 1) for a consistent denominator
     histograms = trajectory_image.reduceRegion(
