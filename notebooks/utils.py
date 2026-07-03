@@ -2257,32 +2257,73 @@ def export_trajectory_overall_csv_gee(
 def plot_trajectory_distribution(
     input_dir: str,
     output_dir: str,
-    csv_filename: str = None, # Adicionado para aceitar o nome do arquivo CSV
-    total_pixels: int = 0,     # Adicionado para aceitar o total de pixels calculado externamente
+    csv_filename: Optional[str] = None,
+    total_pixels: int = 0,
 ) -> None:
     """
-    Generate and save a stacked bar chart of trajectory class distributions,
-    caching the consolidated data to a CSV file.
+    Generate and save a stacked bar chart of overall trajectory distributions.
+
+    This function processes GEE trajectory count CSV files, aggregates the
+    counts, and creates a stacked bar chart showing the percentage of each
+    trajectory (2, 3, 4, 5) relative to a given or calculated total study area.
+    It automatically looks for Pixel_Counts_LULC_*.csv files in the input
+    directory to establish the universal study area denominator.
+    It caches the consolidated data in a local subdirectory for optimized
+    subsequent calls.
+
+    Parameters
+    ----------
+    input_dir : str
+        Path to the directory containing raw GEE-exported CSV files.
+    output_dir : str
+        Path to the root output directory where plots and cached tables will be saved.
+    csv_filename : str, optional
+        Optional specific raw CSV filename to target. If None, the function
+        dynamically searches using a predefined pattern. Default is None.
+    total_pixels : int, optional
+        The total number of valid pixels in the study area. This is used as the
+        universal denominator for calculating percentages. If 0 or negative,
+        the function attempts to derive the denominator from local Pixel_Counts
+        CSVs or local sums. Default is 0.
+
+    Returns
+    -------
+    None
+        Generates a matplotlib plot and saves it as a PNG file.
     """
-    tables_dir = os.path.join(output_dir, "tables")
-    consolidated_csv_path = os.path.join(tables_dir, "aggregated_trajectory_overall.csv")
-    consolidated_pixel_counts_path = os.path.join(tables_dir, "aggregated_pixel_counts.csv")
+    tables_dir = os.path.join(
+        output_dir,
+        "tables",
+    )
+    consolidated_csv_path = os.path.join(
+        tables_dir,
+        "aggregated_trajectory_overall.csv",
+    )
 
     df_overall = None
 
-    # 1. Try to load from consolidated CSV first (cache)
+    # 1. Try to load from consolidated cached CSV first
     if os.path.exists(consolidated_csv_path):
         print(f"Loading consolidated overall trajectory from: {consolidated_csv_path}")
-        df_overall = pd.read_csv(consolidated_csv_path, index_col=0)
+        df_overall = pd.read_csv(
+            consolidated_csv_path,
+            index_col=0,
+        )
         df_overall.columns = df_overall.columns.astype(str)
     else:
         # 2. Locate the raw Trajectory Overall CSV
         if csv_filename:
-            # Use the provided filename directly
-            csv_files = [os.path.join(input_dir, csv_filename)]
+            csv_files = [
+                os.path.join(
+                    input_dir,
+                    csv_filename,
+                )
+            ]
         else:
-            # Fallback to glob if no specific filename is provided
-            search_pattern = os.path.join(input_dir, "Trajectory_Overall_*.csv")
+            search_pattern = os.path.join(
+                input_dir,
+                "Trajectory_Overall_*.csv",
+            )
             csv_files = glob.glob(search_pattern)
 
         if csv_files:
@@ -2290,47 +2331,67 @@ def plot_trajectory_distribution(
             print(f"Processing raw overall trajectory from: {raw_csv_path}")
             df_temp = pd.read_csv(raw_csv_path)
 
-            # Keep columns representing all trajectories 1, 2, 3, 4, 5
-            cols_to_keep = [c for c in df_temp.columns if c.isdigit() and int(c) in [1, 2, 3, 4, 5]]
+            # Keep columns representing all trajectories (1 to 5)
+            cols_to_keep = [
+                c for c in df_temp.columns
+                if c.isdigit() and int(c) in [1, 2, 3, 4, 5]
+            ]
             df_overall = df_temp[cols_to_keep].copy()
-            
+
             # Round and convert counts to strictly integer
             df_overall = df_overall.round(0).astype(int)
 
-            # Save consolidated copy to tables/
-            os.makedirs(tables_dir, exist_ok=True)
+            # Save consolidated copy to tables cache
+            os.makedirs(
+                tables_dir,
+                exist_ok=True,
+            )
             df_overall.to_csv(consolidated_csv_path)
             print(f"Consolidated overall trajectory saved to: {consolidated_csv_path}")
 
     if df_overall is None or df_overall.empty:
-        print(f"No valid GEE CSV data found in {input_dir} and no consolidated CSV found at {consolidated_csv_path}")
+        print(f"No valid GEE CSV data found in {input_dir}")
         return
 
-    # 3. Use the provided total_pixels as the universal denominator
+    # 3. Determine the universal denominator
     if total_pixels <= 0:
-        # Fallback if total_pixels is not provided or is invalid
-        if os.path.exists(consolidated_pixel_counts_path):
-            print(f"Reading universal study area denominator from: {consolidated_pixel_counts_path}")
-            df_pixels = pd.read_csv(consolidated_pixel_counts_path, index_col="Year")
-            total_pixels = df_pixels.iloc[0].sum()
-            print(f"-> Derived universal denominator from pixel counts: {total_pixels:,.0f} pixels")
+        # Attempt to auto-locate Pixel_Counts_LULC_*.csv to build the denominator
+        lulc_patterns = os.path.join(
+            input_dir,
+            "Pixel_Counts_LULC_*.csv",
+        )
+        lulc_files = glob.glob(lulc_patterns)
+        if lulc_files:
+            lulc_path = sorted(lulc_files)[0]
+            print(f"Auto-detecting total area denominator from: {lulc_path}")
+            df_lulc = pd.read_csv(lulc_path)
+            cols_to_ignore = ["system:index", ".geo", "Period", "255"]
+            valid_cols = [
+                c for c in df_lulc.columns
+                if c not in cols_to_ignore
+            ]
+            total_pixels = int(df_lulc[valid_cols].sum().sum())
+            print(f"-> Auto-derived total valid pixels: {total_pixels:,.0f}")
         else:
-            # If no external total_pixels and no consolidated_pixel_counts.csv,
-            # use the sum of all trajectories (including stable) from the current CSV
-            total_pixels = df_overall.sum(axis=1).iloc[0]
-            print(f"Warning: Universal denominator not found. Defaulting to local sum of trajectories: {total_pixels:,.0f} pixels")
+            # Fallback to local sum of all trajectories (including stable)
+            total_pixels = int(df_overall.sum(axis=1).iloc[0])
+            print(f"Warning: Universal denominator not found. Defaulting to local sum: {total_pixels:,.0f}")
 
     if total_pixels == 0:
-        print("Error: Total valid pixels for denominator is 0. Cannot calculate percentages.")
+        print("Error: Total valid pixels for denominator is 0. Cannot plot.")
         return
 
-    # Ensure only strict numeric columns for trajectories 2-5 are used
-    traj_cols = [c for c in df_overall.columns if c.isdigit() and int(c) in [2, 3, 4, 5]]
+    # Ensure only trajectory columns representing change (2 to 5) are selected
+    traj_cols = [
+        c for c in df_overall.columns
+        if c.isdigit() and int(c) in [2, 3, 4, 5]
+    ]
     df_numeric_changes = df_overall[traj_cols].copy()
 
-    # Calculate percentages of change trajectories relative to the total_pixels
+    # Calculate percentages relative to the universal total_pixels
     percentages = {
-        i: float((df_numeric_changes[str(i)].iloc[0] / total_pixels) * 100.0) if str(i) in df_numeric_changes.columns else 0.0
+        i: float((df_numeric_changes[str(i)].iloc[0] / total_pixels) * 100.0)
+        if str(i) in df_numeric_changes.columns else 0.0
         for i in [2, 3, 4, 5]
     }
 
@@ -2339,32 +2400,36 @@ def plot_trajectory_distribution(
         5: "#000066",
         4: "#ff9900",
         3: "#FDE724",
-        2: "#990033"
+        2: "#990033",
     }
 
-    # Plotting
-    fig, ax = plt.subplots(figsize=(6, 6))
+    # 4. Generate the plot
+    fig, ax = plt.subplots(
+        figsize=(6, 6),
+    )
 
     bottom = 0.0
     for traj in ordered_trajs:
         val = percentages[traj]
-        ax.bar(0,
-               val,
-               bottom=bottom,
-               color=colors[traj],
-               width=0.4,
-               edgecolor="none"
+        ax.bar(
+            0,
+            val,
+            bottom=bottom,
+            color=colors[traj],
+            width=0.4,
+            edgecolor="none",
         )
         bottom += val
 
+    # 5. Format axes, labels, and boundaries
     ax.set_ylabel(
         "Change (% of study area)",
-        fontsize=16
+        fontsize=16,
     )
     ax.set_title(
         "Trajectories Overall",
         fontsize=18,
-        pad=15
+        pad=15,
     )
 
     for spine in ["top", "right", "bottom", "left"]:
@@ -2375,16 +2440,25 @@ def plot_trajectory_distribution(
     ax.tick_params(
         axis="y",
         which="major",
-        labelsize=18
+        labelsize=18,
     )
     ax.set_xticks([])
 
-    # Handle limits dynamically based on percentage
+    # Ensure the Y-axis headroom matches the cumulative height of all changes
     max_y = bottom * 1.05 if bottom > 0 else 1.0
-    ax.set_ylim(0, max_y)
+    ax.set_ylim(
+        0,
+        max_y,
+    )
 
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=10))
+    ax.yaxis.set_major_locator(
+        mticker.MaxNLocator(
+            integer=True,
+            nbins=10,
+        )
+    )
 
+    # 6. Configure legend and layout alignments
     legend_elements = [
         Patch(facecolor=colors[2], label="2"),
         Patch(facecolor=colors[3], label="3"),
@@ -2407,28 +2481,28 @@ def plot_trajectory_distribution(
         left=0.15,
         right=0.75,
         bottom=0.1,
-        top=0.9
+        top=0.9,
     )
 
-    # Save the figure
+    # 7. Save output figure
     charts_dir = os.path.join(
         output_dir,
-        "charts"
+        "charts",
     )
     os.makedirs(
         charts_dir,
-        exist_ok=True
+        exist_ok=True,
     )
 
     out_fig_path = os.path.join(
         charts_dir,
-        "graphic_trajectory_percentage_overall.png"
+        "graphic_trajectory_percentage_overall.png",
     )
     plt.savefig(
         out_fig_path,
         dpi=300,
         bbox_inches="tight",
-        format="png"
+        format="png",
     )
     plt.show()
     print(f"Figure saved to: {out_fig_path}")
