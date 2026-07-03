@@ -2257,6 +2257,8 @@ def export_trajectory_overall_csv_gee(
 def plot_trajectory_distribution(
     input_dir: str,
     output_dir: str,
+    csv_filename: str = None, # Adicionado para aceitar o nome do arquivo CSV
+    total_pixels: int = 0,     # Adicionado para aceitar o total de pixels calculado externamente
 ) -> None:
     """
     Generate and save a stacked bar chart of trajectory class distributions,
@@ -2275,8 +2277,13 @@ def plot_trajectory_distribution(
         df_overall.columns = df_overall.columns.astype(str)
     else:
         # 2. Locate the raw Trajectory Overall CSV
-        search_pattern = os.path.join(input_dir, "Trajectory_Overall_*.csv")
-        csv_files = glob.glob(search_pattern)
+        if csv_filename:
+            # Use the provided filename directly
+            csv_files = [os.path.join(input_dir, csv_filename)]
+        else:
+            # Fallback to glob if no specific filename is provided
+            search_pattern = os.path.join(input_dir, "Trajectory_Overall_*.csv")
+            csv_files = glob.glob(search_pattern)
 
         if csv_files:
             raw_csv_path = csv_files[0]
@@ -2299,25 +2306,31 @@ def plot_trajectory_distribution(
         print(f"No valid GEE CSV data found in {input_dir} and no consolidated CSV found at {consolidated_csv_path}")
         return
 
-    # 3. Establish the absolute universal denominator (consistent with Number of Changes)
-    total_pixels = None
-    if os.path.exists(consolidated_pixel_counts_path):
-        print(f"Reading universal study area denominator from: {consolidated_pixel_counts_path}")
-        df_pixels = pd.read_csv(consolidated_pixel_counts_path, index_col="Year")
-        # Sum all classes of the first year to get the absolute stable denominator of the study area
-        total_pixels = df_pixels.iloc[0].sum()
-        print(f"-> Derived universal denominator from pixel counts: {total_pixels:,.0f} pixels")
-    else:
-        # Fallback to the dynamic sum of the trajectory table if the main counts file is missing
-        total_pixels = df_overall.sum(axis=1).iloc[0]
-        print(f"Warning: Universal denominator not found. Defaulting to local sum: {total_pixels:,.0f} pixels")
+    # 3. Use the provided total_pixels as the universal denominator
+    if total_pixels <= 0:
+        # Fallback if total_pixels is not provided or is invalid
+        if os.path.exists(consolidated_pixel_counts_path):
+            print(f"Reading universal study area denominator from: {consolidated_pixel_counts_path}")
+            df_pixels = pd.read_csv(consolidated_pixel_counts_path, index_col="Year")
+            total_pixels = df_pixels.iloc[0].sum()
+            print(f"-> Derived universal denominator from pixel counts: {total_pixels:,.0f} pixels")
+        else:
+            # If no external total_pixels and no consolidated_pixel_counts.csv,
+            # use the sum of all trajectories (including stable) from the current CSV
+            total_pixels = df_overall.sum(axis=1).iloc[0]
+            print(f"Warning: Universal denominator not found. Defaulting to local sum of trajectories: {total_pixels:,.0f} pixels")
 
-    # Ensure only strict numeric columns for trajectories are used to avoid text concatenation
-    traj_cols = [c for c in df_overall.columns if c.isdigit() and int(c) in [1, 2, 3, 4, 5]]
-    df_numeric = df_overall[traj_cols].copy()
+    if total_pixels == 0:
+        print("Error: Total valid pixels for denominator is 0. Cannot calculate percentages.")
+        return
 
+    # Ensure only strict numeric columns for trajectories 2-5 are used
+    traj_cols = [c for c in df_overall.columns if c.isdigit() and int(c) in [2, 3, 4, 5]]
+    df_numeric_changes = df_overall[traj_cols].copy()
+
+    # Calculate percentages of change trajectories relative to the total_pixels
     percentages = {
-        i: float((df_numeric[str(i)].iloc[0] / total_pixels) * 100.0) if str(i) in df_numeric.columns else 0.0
+        i: float((df_numeric_changes[str(i)].iloc[0] / total_pixels) * 100.0) if str(i) in df_numeric_changes.columns else 0.0
         for i in [2, 3, 4, 5]
     }
 
