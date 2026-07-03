@@ -2819,34 +2819,29 @@ def export_global_transition_tasks(
     if full_year_list is None:
         full_year_list = year_list
 
-    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
-    full_stack, _ = build_glance_stack(
-        year_list=full_year_list,
+    # 1. Combine lists to build a single stack containing all required years safely
+    combined_years = sorted(list(set(year_list) | set(full_year_list)))
+    
+    # 2. Build the master stack and extract the global mask based on the FULL timeline
+    master_stack, master_band_names = build_glance_stack(
+        year_list=combined_years,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=NODATA_VALUE,
     )
-    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
-
-    # 2. Build target stack for the specific years we want to export tasks for
-    target_stack, target_band_names = build_glance_stack(
-        year_list=year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=NODATA_VALUE,
-    )
+    
+    # Create the global validity mask strictly using full_year_list bands
+    full_year_bands = [f"y{y}" for y in full_year_list]
+    full_stack_subset = master_stack.select(full_year_bands)
+    global_mask = full_stack_subset.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
 
     # 3. Iterate through each pair to define and start export tasks
     for y1, y2 in pairs:
         label = f"transition_{y1}_{y2}"
         
-        # Find the index of y1 and y2 in year_list
-        idx1 = year_list.index(y1)
-        idx2 = year_list.index(y2)
-
-        # Select images from the target stack and apply global mask
-        img_start = target_stack.select(target_band_names[idx1]).rename(GLANCE_CLASS_BAND).updateMask(global_mask)
-        img_end = target_stack.select(target_band_names[idx2]).rename(GLANCE_CLASS_BAND).updateMask(global_mask)
+        # Select images directly by year band name from the master stack and apply global mask
+        img_start = master_stack.select(f"y{y1}").rename(GLANCE_CLASS_BAND).updateMask(global_mask)
+        img_end = master_stack.select(f"y{y2}").rename(GLANCE_CLASS_BAND).updateMask(global_mask)
 
         # 5. Create transition image: (Start * 100) + End
         transition_image = img_start.multiply(100).add(img_end)
