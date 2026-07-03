@@ -395,6 +395,12 @@ def export_global_pixel_counts_tasks(
     list of ee.batch.Task
         A list containing all the triggered Earth Engine tasks.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     glance_collection = ee.ImageCollection(GLANCE_COLLECTION_ID).select(GLANCE_CLASS_BAND)
     tasks_list = []
 
@@ -772,6 +778,12 @@ def export_global_change_frequency_tasks(
     Triggers GEE tasks to calculate the frequency of pixel changes for each
     consecutive interval in a time series and exports them as CSV files.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     if full_year_list is None:
         full_year_list = year_list
 
