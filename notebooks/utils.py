@@ -5813,6 +5813,8 @@ def parse_gee_raw_csv(file_path: str) -> pd.DataFrame:
         if not pair:
             continue
         k, v = pair.split("=")
+        if k.strip().lower() == "null":
+            continue
         k_int = int(k)
         val_float = float(v)
         # For GLanCE, transition classes are encoded as start * 100 + end
