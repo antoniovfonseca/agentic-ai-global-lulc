@@ -2849,6 +2849,12 @@ def export_global_transition_tasks(
     list of ee.batch.Task
         A list of triggered Earth Engine Task objects for monitoring.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     # Initialize the GEE ImageCollection
     collection = ee.ImageCollection(GLANCE_COLLECTION_ID)
 
