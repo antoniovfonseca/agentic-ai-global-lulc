@@ -1873,30 +1873,38 @@ def export_trajectory_intervals_csv_gee(
     Compute trajectory interval contributions using GEE and export to CSV.
     Returns pixel counts instead of area.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     print(f"Preparing Trajectory Contributions GEE Task for {year_list[0]}-{year_list[-1]}...")
 
     if full_year_list is None:
         full_year_list = year_list
 
-    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
-    full_stack, _ = build_glance_stack(
-        year_list=full_year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=NODATA_VALUE,
-    )
-    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+    # 1. Combine lists to build a single stack containing all required years safely
+    combined_years = sorted(list(set(year_list) | set(full_year_list)))
 
-    # 2. Build target stack for the specific years we want to export tasks for
-    target_stack, target_band_names = build_glance_stack(
-        year_list=year_list,
+    # 2. Build the master stack and extract the global mask based on the FULL timeline
+    master_stack, master_band_names = build_glance_stack(
+        year_list=combined_years,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=NODATA_VALUE,
     )
     
+    # Create the global validity mask strictly using full_year_list bands
+    full_year_bands = [f"y{y}" for y in full_year_list]
+    full_stack_subset = master_stack.select(full_year_bands)
+    global_mask = full_stack_subset.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # Build target bands list for trajectory calculation
+    target_band_names = [f"y{y}" for y in year_list]
+    
     # 3. Calculate trajectory using the consistent global mask
-    trajectory_image = calculate_trajectory_gee(target_stack, target_band_names, global_mask, NODATA_VALUE)
+    trajectory_image = calculate_trajectory_gee(master_stack, target_band_names, global_mask, NODATA_VALUE)
 
     # 3. Filter valid trajectories (we only care about 2, 3, 4, 5)
     valid_traj_mask = trajectory_image.gte(2).And(trajectory_image.lte(5))
@@ -1909,8 +1917,8 @@ def export_trajectory_intervals_csv_gee(
         y_end = year_list[i + 1]
         band_label = f"i_{y_start}_{y_end}"
         
-        img1 = target_stack.select(target_band_names[i]).rename(GLANCE_CLASS_BAND)
-        img2 = target_stack.select(target_band_names[i + 1]).rename(GLANCE_CLASS_BAND)
+        img1 = master_stack.select(f"y{y_start}").rename(GLANCE_CLASS_BAND)
+        img2 = master_stack.select(f"y{y_end}").rename(GLANCE_CLASS_BAND)
         change_mask = img1.neq(img2)
         
         traj_for_interval = trajectory_image.updateMask(change_mask).rename(band_label)
