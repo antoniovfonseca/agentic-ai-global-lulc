@@ -82,37 +82,51 @@ GLANCE_REGIONS_REGISTRY = {
     }
 }
 
-# --- ACTIVE REGION CONFIGURATION ---
-# Simply change this string or uncomment the region you want to process!
-ACTIVE_REGION = 'EU'          # Europe (2,052 tiles)
-# ACTIVE_REGION = 'AN'        # Antarctica (3,472 tiles)
-# ACTIVE_REGION = 'AF'        # Africa (4,440 tiles)
-# ACTIVE_REGION = 'SA'        # South America (5,032 tiles)
-# ACTIVE_REGION = 'AS'        # Asia (5,082 tiles)
-# ACTIVE_REGION = 'NA'        # North America (5,376 tiles)
-# ACTIVE_REGION = 'OC'        # Oceania (8,814 tiles)
-
-# Fetch configuration data for the active region
-_config = GLANCE_REGIONS_REGISTRY[ACTIVE_REGION]
-
-# Global variables automatically populated based on your ACTIVE_REGION choice
-GLOBAL_GEOM = ee.Geometry.Rectangle(_config['geom'], "EPSG:4326", False)
+# --- DYNAMIC REGION CONFIGURATION ---
+# Initialize placeholders for global variables
+ACTIVE_REGION = 'AF'
+GLOBAL_GEOM = None
 GLANCE_RESOLUTION = [30, 30]
-GLANCE_UL_XY = _config['ul_xy']
+GLANCE_UL_XY = None
+GLANCE_CRS_WKT = None
 
-# Dynamically generated WKT projection system
-GLANCE_CRS_WKT = f"""PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - {ACTIVE_REGION} - V01",
-    GEOGCS["GCS_WGS_1984",
-        DATUM["D_WGS_1984",
-            SPHEROID["WGS_1984",6378137.0,298.257223563]],
-        PRIMEM["Greenwich",0.0],
-        UNIT["degree",0.0174532925199433]],
-    PROJECTION["Lambert_Azimuthal_Equal_Area"],
-    PARAMETER["false_easting",0.0],
-    PARAMETER["false_northing",0.0],
-    PARAMETER["longitude_of_center",{_config['center_lon']}],
-    PARAMETER["latitude_of_center",{_config['center_lat']}],
-    UNIT["meter",1.0]]"""
+def initialize_active_region(region_code: str) -> None:
+    """
+    Dynamically configure all global parameters for the active processing region.
+
+    Parameters
+    ----------
+    region_code : str
+        The 2-letter regional code (e.g., 'AF', 'SA', 'NA', 'EU', 'AS', 'OC', 'AN').
+    """
+    global ACTIVE_REGION, GLOBAL_GEOM, GLANCE_UL_XY, GLANCE_CRS_WKT
+    
+    if region_code not in GLANCE_REGIONS_REGISTRY:
+        raise ValueError(
+            f"Region code '{region_code}' is invalid. "
+            f"Choose from: {list(GLANCE_REGIONS_REGISTRY.keys())}"
+        )
+        
+    ACTIVE_REGION = region_code
+    config = GLANCE_REGIONS_REGISTRY[region_code]
+    
+    GLOBAL_GEOM = ee.Geometry.Rectangle(config['geom'], "EPSG:4326", False)
+    GLANCE_UL_XY = config['ul_xy']
+    
+    GLANCE_CRS_WKT = f"""PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - {ACTIVE_REGION} - V01",
+        GEOGCS["GCS_WGS_1984",
+            DATUM["D_WGS_1984",
+                SPHEROID["WGS_1984",6378137.0,298.257223563]],
+            PRIMEM["Greenwich",0.0],
+            UNIT["degree",0.0174532925199433]],
+        PROJECTION["Lambert_Azimuthal_Equal_Area"],
+        PARAMETER["false_easting",0.0],
+        PARAMETER["false_northing",0.0],
+        PARAMETER["longitude_of_center",{config['center_lon']}],
+        PARAMETER["latitude_of_center",{config['center_lat']}],
+        UNIT["meter",1.0]]"""
+        
+    print(f"Active region successfully initialized to: {ACTIVE_REGION}")
 
 # 3. Class Metadata
 GLANCE_METADATA = {
