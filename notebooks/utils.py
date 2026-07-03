@@ -2944,37 +2944,45 @@ def export_unaccounted_extent_task_gee(
     Computes the Unaccounted Extent component pixel-by-pixel within GEE
     and exports the aggregated matrix as a CSV.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     print(f"Preparing Unaccounted Extent GEE Task for {year_list[0]}-{year_list[-1]}...")
 
     if full_year_list is None:
         full_year_list = year_list
 
-    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
-    full_stack, _ = build_glance_stack(
-        year_list=full_year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=nodata_val,
-    )
-    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+    # 1. Combine lists to build a single stack containing all required years safely
+    combined_years = sorted(list(set(year_list) | set(full_year_list)))
 
-    # 2. Build target stack for the specific years we want to export tasks for
-    target_stack, target_band_names = build_glance_stack(
-        year_list=year_list,
+    # 2. Build the master stack and extract the global mask based on the FULL timeline
+    master_stack, master_band_names = build_glance_stack(
+        year_list=combined_years,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
+    
+    # Create the global validity mask strictly using full_year_list bands
+    full_year_bands = [f"y{y}" for y in full_year_list]
+    full_stack_subset = master_stack.select(full_year_bands)
+    global_mask = full_stack_subset.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # Build target bands list for trajectory calculation
+    target_band_names = [f"y{y}" for y in year_list]
 
     # 3. Calculate the standard trajectory classification using the consistent global mask
-    trajectory_image = calculate_trajectory_gee(target_stack, target_band_names, global_mask, nodata_val)
+    trajectory_image = calculate_trajectory_gee(master_stack, target_band_names, global_mask, nodata_val)
 
     # 3. Mask is Trajectory 5 (which mathematically represents the Unaccounted Extent!)
     unaccounted_mask = trajectory_image.eq(5)
 
     # 4. Get start and end images
-    start_img = target_stack.select(target_band_names[0]).rename(GLANCE_CLASS_BAND)
-    end_img = target_stack.select(target_band_names[-1]).rename(GLANCE_CLASS_BAND)
+    start_img = master_stack.select(f"y{year_list[0]}").rename(GLANCE_CLASS_BAND)
+    end_img = master_stack.select(f"y{year_list[-1]}").rename(GLANCE_CLASS_BAND)
 
     # 5. Create the transition code image masked to Trajectory 5
     unaccounted_transition_code = start_img.multiply(100).add(end_img).rename("transition").updateMask(unaccounted_mask)
