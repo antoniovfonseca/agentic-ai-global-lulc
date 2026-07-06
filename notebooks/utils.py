@@ -1217,21 +1217,28 @@ def plot_number_of_changes_distribution(
         df_counts.to_csv(consolidated_csv_path)
         print(f"Consolidated overall change frequency saved to: {consolidated_csv_path}")
 
-    # 4. Calculate percentages relative to the entire study area (excluding 0)
-    total_study_area_pixels = df_counts['Count'].sum()
+    # 4. Strict numerical alignment: Ensure index and counts are clean integers
+    df_numeric = df_counts.copy()
+    df_numeric.index = pd.to_numeric(df_numeric.index, errors='coerce')
+    df_numeric = df_numeric.dropna()
+    df_numeric['Count'] = pd.to_numeric(df_numeric['Count'], errors='coerce').fillna(0).astype(int)
 
-    if total_study_area_pixels == 0:
+    # Denominator must be the entire valid study area: stable (0) + all changes (1..N)
+    # We strictly exclude NoData (255) from the total area calculations
+    df_valid_area = df_numeric[(df_numeric.index >= 0) & (df_numeric.index < nodata_val)]
+    total_valid_pixels = df_valid_area['Count'].sum()
+
+    if total_valid_pixels == 0:
         print("Error: No valid study area pixels found for overall change frequency.")
         return
 
+    # Calculate percentages for changes (> 0) relative to the total valid study area
+    df_filtered = df_valid_area[df_valid_area.index > 0]
     percentages = {}
-    for n_changes, row in df_counts.iterrows():
+    for n_changes, row in df_filtered.iterrows():
         count = row['Count']
         n_changes_int = int(n_changes)
-        if n_changes_int == 0:
-            continue  # Exclude stable pixels (0 changes) from being plotted
-        
-        pct = (count / total_study_area_pixels) * 100.0
+        pct = (count / total_valid_pixels) * 100.0
         percentages[n_changes_int] = pct
 
     # 4. Setup Colors
@@ -1338,12 +1345,10 @@ def plot_number_of_changes_distribution(
         [],
     )
 
-    # Note: Keep Y-axis limit at 105 so the scale is always absolute
-    max_y = bottom * 1.05 if bottom > 0 else 1.0
-
+    # Force Y-axis to be absolute 0-100% since it represents percentage of the study area
     ax.set_ylim(
         0,
-        max_y,
+        100.0,
     )
 
     # Define the number of bins
@@ -2414,44 +2419,32 @@ def plot_trajectory_distribution(
         print(f"No valid GEE CSV data found in {input_dir}")
         return
 
-    # 3. Determine the universal denominator
-    if total_pixels <= 0:
-        # Attempt to auto-locate Pixel_Counts_LULC_*.csv to build the denominator
-        lulc_patterns = os.path.join(
-            input_dir,
-            "Pixel_Counts_LULC_*.csv",
-        )
-        lulc_files = glob.glob(lulc_patterns)
-        if lulc_files:
-            lulc_path = sorted(lulc_files)[0]
-            print(f"Auto-detecting total area denominator from: {lulc_path}")
-            df_lulc = pd.read_csv(lulc_path)
-            cols_to_ignore = ["system:index", ".geo", "Period", "255"]
-            valid_cols = [
-                c for c in df_lulc.columns
-                if c not in cols_to_ignore
-            ]
-            total_pixels = int(df_lulc[valid_cols].sum().sum())
-            print(f"-> Auto-derived total valid pixels: {total_pixels:,.0f}")
-        else:
-            # Fallback to local sum of all trajectories (including stable)
-            total_pixels = int(df_overall.sum(axis=1).iloc[0])
-            print(f"Warning: Universal denominator not found. Defaulting to local sum: {total_pixels:,.0f}")
+    # 3. Parse and extract all valid trajectory columns (1 to 5) to establish the correct denominator
+    all_traj_cols = [
+        c for c in df_overall.columns
+        if c.isdigit() and int(c) in [1, 2, 3, 4, 5]
+    ]
+    df_numeric_all = df_overall[all_traj_cols].copy().astype(float)
+    df_numeric_all.columns = [str(int(float(c))) for c in df_numeric_all.columns]
 
-    if total_pixels == 0:
+    # Total valid study area denominator (sum of all trajectories 1, 2, 3, 4, 5)
+    total_valid_pixels = float(df_numeric_all.iloc[0].sum())
+
+    if total_valid_pixels == 0:
         print("Error: Total valid pixels for denominator is 0. Cannot plot.")
         return
 
-    # Ensure only trajectory columns representing change (2 to 5) are selected
+    # Target columns representing changes (2 to 5) for percentage calculations
     traj_cols = [
         c for c in df_overall.columns
         if c.isdigit() and int(c) in [2, 3, 4, 5]
     ]
     df_numeric_changes = df_overall[traj_cols].copy()
+    df_numeric_changes.columns = [str(int(float(c))) for c in df_numeric_changes.columns]
 
-    # Calculate percentages relative to the universal total_pixels
+    # Calculate percentages relative to the total valid study area
     percentages = {
-        i: float((df_numeric_changes[str(i)].iloc[0] / total_pixels) * 100.0)
+        i: float((df_numeric_changes[str(i)].iloc[0] / total_valid_pixels) * 100.0)
         if str(i) in df_numeric_changes.columns else 0.0
         for i in [2, 3, 4, 5]
     }
@@ -2505,11 +2498,10 @@ def plot_trajectory_distribution(
     )
     ax.set_xticks([])
 
-    # Ensure the Y-axis headroom matches the cumulative height of all changes
-    max_y = bottom * 1.05 if bottom > 0 else 1.0
+    # Force Y-axis to be absolute 0-100% since it represents percentage of the study area
     ax.set_ylim(
         0,
-        max_y,
+        100.0,
     )
 
     ax.yaxis.set_major_locator(
@@ -6590,6 +6582,12 @@ def export_global_overall_change_frequency_csv_gee(
     Compute and export a single CSV representing the overall frequency of changes
     (how many pixels changed 0, 1, 2, ... N times) across the entire timeline.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     print(f"Preparing Overall Change Frequency GEE Task for {year_list[0]}-{year_list[-1]}...")
 
     if full_year_list is None:
