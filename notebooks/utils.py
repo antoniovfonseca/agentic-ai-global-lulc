@@ -1217,12 +1217,14 @@ def plot_number_of_changes_distribution(
         df_counts.to_csv(consolidated_csv_path)
         print(f"Consolidated overall change frequency saved to: {consolidated_csv_path}")
 
-    # 4. Strict filtering: Remove stable (0), NoData (255) and any potential GEE metadata keys
-    df_filtered = df_counts.copy()
-    df_filtered.index = pd.to_numeric(df_filtered.index, errors='coerce')
-    df_filtered = df_filtered.dropna()
-    df_filtered = df_filtered[df_filtered.index > 0]
-    df_filtered = df_filtered[df_filtered.index < nodata_val]
+    # 4. Strict numerical alignment: Ensure index is strictly integer to avoid scientific notation/string bugs
+    df_numeric = df_counts.copy()
+    df_numeric.index = pd.to_numeric(df_numeric.index, errors='coerce')
+    df_numeric = df_numeric.dropna()
+    df_numeric['Count'] = pd.to_numeric(df_numeric['Count'], errors='coerce').fillna(0).astype(int)
+    
+    # Keep strictly values representing changes: > 0 and < nodata_val (255)
+    df_filtered = df_numeric[(df_numeric.index > 0) & (df_numeric.index < nodata_val)]
     total_changing_pixels = df_filtered['Count'].sum()
 
     if total_changing_pixels == 0:
@@ -2411,16 +2413,18 @@ def plot_trajectory_distribution(
         print(f"No valid GEE CSV data found in {input_dir}")
         return
 
-    # 3. Ensure only trajectory columns representing change (2 to 5) are selected
+    # 3. Parse and extract only columns representing valid trajectory changes (2 to 5)
     traj_cols = [
         c for c in df_overall.columns
         if c.isdigit() and int(c) in [2, 3, 4, 5]
     ]
-    df_numeric_changes = df_overall[traj_cols].copy()
-    df_numeric_changes.columns = df_numeric_changes.columns.astype(str)
+    
+    # Force conversion of all values to float/int to handle GEE scientific notation (e.g., 3.06E7)
+    df_numeric_changes = df_overall[traj_cols].copy().astype(float)
+    df_numeric_changes.columns = [str(int(float(c))) for c in df_numeric_changes.columns]
     
     # Base denominator: sum strictly of trajectory changes 2, 3, 4, and 5 for the first row
-    total_changing_pixels = int(df_numeric_changes.iloc[0].sum())
+    total_changing_pixels = float(df_numeric_changes.iloc[0].sum())
 
     if total_changing_pixels == 0:
         print("Error: Total changing pixels for denominator is 0. Cannot plot.")
