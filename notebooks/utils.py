@@ -1217,21 +1217,19 @@ def plot_number_of_changes_distribution(
         df_counts.to_csv(consolidated_csv_path)
         print(f"Consolidated overall change frequency saved to: {consolidated_csv_path}")
 
-    # 4. Calculate percentages relative to the entire study area (excluding 0)
-    total_study_area_pixels = df_counts['Count'].sum()
+    # Remove stable (0) and NoData (255) from the frequency calculation
+    df_filtered = df_counts.drop(index=[0, nodata_val], errors='ignore')
+    total_changing_pixels = df_filtered['Count'].sum()
 
-    if total_study_area_pixels == 0:
-        print("Error: No valid study area pixels found for overall change frequency.")
+    if total_changing_pixels == 0:
+        print("Error: No changing pixels found for overall change frequency.")
         return
 
     percentages = {}
-    for n_changes, row in df_counts.iterrows():
+    for n_changes, row in df_filtered.iterrows():
         count = row['Count']
         n_changes_int = int(n_changes)
-        if n_changes_int == 0:
-            continue  # Exclude stable pixels (0 changes) from being plotted
-        
-        pct = (count / total_study_area_pixels) * 100.0
+        pct = (count / total_changing_pixels) * 100.0
         percentages[n_changes_int] = pct
 
     # 4. Setup Colors
@@ -1426,6 +1424,12 @@ def export_global_number_of_changes_raster_task(
     Compute and save a raster representing the total number of class changes per pixel
     using Google Earth Engine, and export it to Google Drive.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     if full_year_list is None:
         full_year_list = year_list
 
@@ -2403,44 +2407,23 @@ def plot_trajectory_distribution(
         print(f"No valid GEE CSV data found in {input_dir}")
         return
 
-    # 3. Determine the universal denominator
-    if total_pixels <= 0:
-        # Attempt to auto-locate Pixel_Counts_LULC_*.csv to build the denominator
-        lulc_patterns = os.path.join(
-            input_dir,
-            "Pixel_Counts_LULC_*.csv",
-        )
-        lulc_files = glob.glob(lulc_patterns)
-        if lulc_files:
-            lulc_path = sorted(lulc_files)[0]
-            print(f"Auto-detecting total area denominator from: {lulc_path}")
-            df_lulc = pd.read_csv(lulc_path)
-            cols_to_ignore = ["system:index", ".geo", "Period", "255"]
-            valid_cols = [
-                c for c in df_lulc.columns
-                if c not in cols_to_ignore
-            ]
-            total_pixels = int(df_lulc[valid_cols].sum().sum())
-            print(f"-> Auto-derived total valid pixels: {total_pixels:,.0f}")
-        else:
-            # Fallback to local sum of all trajectories (including stable)
-            total_pixels = int(df_overall.sum(axis=1).iloc[0])
-            print(f"Warning: Universal denominator not found. Defaulting to local sum: {total_pixels:,.0f}")
-
-    if total_pixels == 0:
-        print("Error: Total valid pixels for denominator is 0. Cannot plot.")
-        return
-
     # Ensure only trajectory columns representing change (2 to 5) are selected
     traj_cols = [
         c for c in df_overall.columns
         if c.isdigit() and int(c) in [2, 3, 4, 5]
     ]
     df_numeric_changes = df_overall[traj_cols].copy()
+    
+    # Base denominator: sum strictly of trajectory changes 2, 3, 4, and 5
+    total_changing_pixels = int(df_numeric_changes.sum(axis=1).iloc[0])
 
-    # Calculate percentages relative to the universal total_pixels
+    if total_changing_pixels == 0:
+        print("Error: Total changing pixels for denominator is 0. Cannot plot.")
+        return
+
+    # Calculate percentages relative to the total changing area
     percentages = {
-        i: float((df_numeric_changes[str(i)].iloc[0] / total_pixels) * 100.0)
+        i: float((df_numeric_changes[str(i)].iloc[0] / total_changing_pixels) * 100.0)
         if str(i) in df_numeric_changes.columns else 0.0
         for i in [2, 3, 4, 5]
     }
@@ -2495,10 +2478,9 @@ def plot_trajectory_distribution(
     ax.set_xticks([])
 
     # Ensure the Y-axis headroom matches the cumulative height of all changes
-    max_y = bottom * 1.05 if bottom > 0 else 1.0
     ax.set_ylim(
         0,
-        max_y,
+        105,
     )
 
     ax.yaxis.set_major_locator(
