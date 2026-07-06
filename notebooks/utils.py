@@ -1345,8 +1345,9 @@ def plot_number_of_changes_distribution(
         [],
     )
 
-    # Dynamically scale Y-axis to match the total percentage of changes in the study area
+    # Note: Keep Y-axis limit at 105 so the scale is always absolute
     max_y = bottom * 1.05 if bottom > 0 else 1.0
+
     ax.set_ylim(
         0,
         max_y,
@@ -6584,12 +6585,6 @@ def export_global_overall_change_frequency_csv_gee(
     Compute and export a single CSV representing the overall frequency of changes
     (how many pixels changed 0, 1, 2, ... N times) across the entire timeline.
     """
-    if GLOBAL_GEOM is None:
-        raise ValueError(
-            "GLOBAL_GEOM is not initialized. Please call "
-            "utils.initialize_active_region(region_code) before running tasks."
-        )
-
     print(f"Preparing Overall Change Frequency GEE Task for {year_list[0]}-{year_list[-1]}...")
 
     if full_year_list is None:
