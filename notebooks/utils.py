@@ -1217,8 +1217,12 @@ def plot_number_of_changes_distribution(
         df_counts.to_csv(consolidated_csv_path)
         print(f"Consolidated overall change frequency saved to: {consolidated_csv_path}")
 
-    # Remove stable (0) and NoData (255) from the frequency calculation
-    df_filtered = df_counts.drop(index=[0, nodata_val], errors='ignore')
+    # 4. Strict filtering: Remove stable (0), NoData (255) and any potential GEE metadata keys
+    df_filtered = df_counts.copy()
+    df_filtered.index = pd.to_numeric(df_filtered.index, errors='coerce')
+    df_filtered = df_filtered.dropna()
+    df_filtered = df_filtered[df_filtered.index > 0]
+    df_filtered = df_filtered[df_filtered.index < nodata_val]
     total_changing_pixels = df_filtered['Count'].sum()
 
     if total_changing_pixels == 0:
@@ -2407,15 +2411,16 @@ def plot_trajectory_distribution(
         print(f"No valid GEE CSV data found in {input_dir}")
         return
 
-    # Ensure only trajectory columns representing change (2 to 5) are selected
+    # 3. Ensure only trajectory columns representing change (2 to 5) are selected
     traj_cols = [
         c for c in df_overall.columns
         if c.isdigit() and int(c) in [2, 3, 4, 5]
     ]
     df_numeric_changes = df_overall[traj_cols].copy()
+    df_numeric_changes.columns = df_numeric_changes.columns.astype(str)
     
-    # Base denominator: sum strictly of trajectory changes 2, 3, 4, and 5
-    total_changing_pixels = int(df_numeric_changes.sum(axis=1).iloc[0])
+    # Base denominator: sum strictly of trajectory changes 2, 3, 4, and 5 for the first row
+    total_changing_pixels = int(df_numeric_changes.iloc[0].sum())
 
     if total_changing_pixels == 0:
         print("Error: Total changing pixels for denominator is 0. Cannot plot.")
