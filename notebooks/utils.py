@@ -1345,10 +1345,11 @@ def plot_number_of_changes_distribution(
         [],
     )
 
-    # Force Y-axis to be absolute 0-100% since it represents percentage of the study area
+    # Dynamically scale Y-axis to match the total percentage of changes in the study area
+    max_y = bottom * 1.05 if bottom > 0 else 1.0
     ax.set_ylim(
         0,
-        100.0,
+        max_y,
     )
 
     # Define the number of bins
@@ -2498,10 +2499,11 @@ def plot_trajectory_distribution(
     )
     ax.set_xticks([])
 
-    # Force Y-axis to be absolute 0-100% since it represents percentage of the study area
+    # Dynamically scale Y-axis to match the total percentage of changes in the study area
+    max_y = bottom * 1.05 if bottom > 0 else 1.0
     ax.set_ylim(
         0,
-        100.0,
+        max_y,
     )
 
     ax.yaxis.set_major_locator(
