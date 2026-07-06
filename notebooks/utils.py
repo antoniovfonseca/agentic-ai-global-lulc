@@ -90,43 +90,55 @@ GLANCE_RESOLUTION = [30, 30]
 GLANCE_UL_XY = None
 GLANCE_CRS_WKT = None
 
-def initialize_active_region(region_code: str) -> None:
+def initialize_active_region(region_code: Union[str, List[str]]) -> None:
     """
     Dynamically configure all global parameters for the active processing region.
+    Supports single region strings or a list of region strings for mosaicking.
 
     Parameters
     ----------
-    region_code : str
-        The 2-letter regional code (e.g., 'AF', 'SA', 'NA', 'EU', 'AS', 'OC', 'AN').
+    region_code : str or list of str
+        The 2-letter regional code or a list of codes (e.g., ['EU', 'AF', 'SA']).
     """
     global ACTIVE_REGION, GLOBAL_GEOM, GLANCE_UL_XY, GLANCE_CRS_WKT
     
-    if region_code not in GLANCE_REGIONS_REGISTRY:
-        raise ValueError(
-            f"Region code '{region_code}' is invalid. "
-            f"Choose from: {list(GLANCE_REGIONS_REGISTRY.keys())}"
-        )
+    if isinstance(region_code, list):
+        # Handle multiple regions as a unified mosaic
+        mosaicker = GlanceMosaicker(region_codes=region_code)
+        GLOBAL_GEOM = mosaicker.unified_geometry
+        ACTIVE_REGION = "GLOBAL_MOSAIC"
+        GLANCE_UL_XY = None # Not applicable for mosaics
+        # Use EPSG:6933 (Cylindrical Equal Area) as default global projection
+        GLANCE_CRS_WKT = "EPSG:6933"
+        print(f"Active region successfully initialized to a global mosaic of: {region_code}")
+    else:
+        # Handle a single region
+        if region_code not in GLANCE_REGIONS_REGISTRY:
+            raise ValueError(
+                f"Region code '{region_code}' is invalid. "
+                f"Choose from: {list(GLANCE_REGIONS_REGISTRY.keys())}"
+            )
+            
+        ACTIVE_REGION = region_code
+        config = GLANCE_REGIONS_REGISTRY[region_code]
         
-    ACTIVE_REGION = region_code
-    config = GLANCE_REGIONS_REGISTRY[region_code]
-    
-    GLOBAL_GEOM = ee.Geometry.Rectangle(config['geom'], "EPSG:4326", False)
-    GLANCE_UL_XY = config['ul_xy']
-    
-    GLANCE_CRS_WKT = f"""PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - {ACTIVE_REGION} - V01",
-        GEOGCS["GCS_WGS_1984",
-            DATUM["D_WGS_1984",
-                SPHEROID["WGS_1984",6378137.0,298.257223563]],
-            PRIMEM["Greenwich",0.0],
-            UNIT["degree",0.0174532925199433]],
-        PROJECTION["Lambert_Azimuthal_Equal_Area"],
-        PARAMETER["false_easting",0.0],
-        PARAMETER["false_northing",0.0],
-        PARAMETER["longitude_of_center",{config['center_lon']}],
-        PARAMETER["latitude_of_center",{config['center_lat']}],
-        UNIT["meter",1.0]]"""
+        GLOBAL_GEOM = ee.Geometry.Rectangle(config['geom'], "EPSG:4326", False)
+        GLANCE_UL_XY = config['ul_xy']
         
-    print(f"Active region successfully initialized to: {ACTIVE_REGION}")
+        GLANCE_CRS_WKT = f"""PROJCS["BU MEaSUREs Lambert Azimuthal Equal Area - {ACTIVE_REGION} - V01",
+            GEOGCS["GCS_WGS_1984",
+                DATUM["D_WGS_1984",
+                    SPHEROID["WGS_1984",6378137.0,298.257223563]],
+                PRIMEM["Greenwich",0.0],
+                UNIT["degree",0.0174532925199433]],
+            PROJECTION["Lambert_Azimuthal_Equal_Area"],
+            PARAMETER["false_easting",0.0],
+            PARAMETER["false_northing",0.0],
+            PARAMETER["longitude_of_center",{config['center_lon']}],
+            PARAMETER["latitude_of_center",{config['center_lat']}],
+            UNIT["meter",1.0]]"""
+            
+        print(f"Active region successfully initialized to: {ACTIVE_REGION}")
 
 # 3. Class Metadata
 GLANCE_METADATA = {
@@ -6585,6 +6597,12 @@ def export_global_overall_change_frequency_csv_gee(
     Compute and export a single CSV representing the overall frequency of changes
     (how many pixels changed 0, 1, 2, ... N times) across the entire timeline.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     print(f"Preparing Overall Change Frequency GEE Task for {year_list[0]}-{year_list[-1]}...")
 
     if full_year_list is None:
@@ -6645,3 +6663,109 @@ def export_global_overall_change_frequency_csv_gee(
     task.start()
     print(f"Task '{export_name}' submitted to Google Earth Engine.")
     return task
+
+
+###############################################################################
+#                                                                             #
+#                  10. GLOBAL MOSAIC CLASS & FUNCTIONS                        #
+#                                                                             #
+###############################################################################
+
+class GlanceMosaicker:
+    """
+    Manages continental GLanCE regions to build a consistent global mosaic
+    and unified geometry operations directly inside Google Earth Engine.
+    """
+
+    def __init__(self, region_codes: List[str]) -> None:
+        """
+        Initialize the mosaicker with a customizable set of continental regions.
+        
+        Parameters
+        ----------
+        region_codes : list of str
+            List of regional codes to compose the mosaic (e.g., ['EU', 'AF', 'SA']).
+        """
+        if not region_codes:
+            raise ValueError("You must provide at least one region code to construct the mosaic.")
+            
+        self.region_codes = region_codes
+        self._validate_regions()
+        self.unified_geometry = self._build_unified_geometry()
+
+    def _validate_regions(self) -> None:
+        """Validate if all provided region codes exist in the registry."""
+        for code in self.region_codes:
+            if code not in GLANCE_REGIONS_REGISTRY:
+                raise ValueError(
+                    f"Region code '{code}' is invalid. "
+                    f"Choose from: {list(GLANCE_REGIONS_REGISTRY.keys())}"
+                )
+
+    def _build_unified_geometry(self) -> ee.Geometry:
+        """
+        Combine the individual rectangular bounding boxes into a single 
+        ee.Geometry.MultiPolygon nativelly in GEE.
+        """
+        geometries = []
+        for code in self.region_codes:
+            geom_coords = GLANCE_REGIONS_REGISTRY[code]['geom']
+            # Create individual non-planar rectangular polygons
+            rect = ee.Geometry.Rectangle(geom_coords, "EPSG:4326", False)
+            geometries.append(rect)
+        
+        # Perform a spatial union to create a single clean multipolygon geometry
+        return ee.Geometry.MultiPolygon(geometries)
+
+    def get_global_crs_and_transform(self, scale: int = 300) -> Tuple[str, List[float]]:
+        """
+        Get the global Cylindrical Equal Area projection parameters (EPSG:6933).
+        This CRS preserves area properties globally, making pixel counts and area calculations
+        extremely accurate across different latitudes.
+        
+        Parameters
+        ----------
+        scale : int
+            The spatial resolution in meters (e.g., 300 or 30).
+            
+        Returns
+        -------
+        tuple
+            A tuple containing the CRS string ("EPSG:6933") and the affine transform list.
+        """
+        crs = "EPSG:6933"
+        # Setup a standard global transform aligned to the coordinate origin
+        transform = [scale, 0, 0, 0, -scale, 0]
+        return crs, transform
+
+    def get_mosaicked_image_collection(self, year: int) -> ee.Image:
+        """
+        Retrieve and mosaic the GLanCE land cover images for the specified year
+        restricted to the unified continental boundary.
+        
+        Parameters
+        ----------
+        year : int
+            The target year to mosaic (e.g., 2019).
+            
+        Returns
+        -------
+        ee.Image
+            The unified, masked land cover image for the selected year.
+        """
+        start_date = f"{year}-01-01"
+        end_date = f"{year}-12-31"
+
+        # Filter GLanCE collection by date and band
+        collection = (
+            ee.ImageCollection(GLANCE_COLLECTION_ID)
+            .filterDate(start_date, end_date)
+            .select(GLANCE_CLASS_BAND)
+        )
+
+        # Mosaic overlapping zones (resolving potential duplicates via first-order placement)
+        # and clip strictly to our continental limits
+        mosaicked_image = collection.mosaic().clip(self.unified_geometry)
+        
+        # Enforce uint8 casting to preserve data type limits
+        return mosaicked_image.toByte()
