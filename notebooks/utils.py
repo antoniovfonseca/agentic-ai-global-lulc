@@ -1217,25 +1217,21 @@ def plot_number_of_changes_distribution(
         df_counts.to_csv(consolidated_csv_path)
         print(f"Consolidated overall change frequency saved to: {consolidated_csv_path}")
 
-    # 4. Strict numerical alignment: Ensure index is strictly integer to avoid scientific notation/string bugs
-    df_numeric = df_counts.copy()
-    df_numeric.index = pd.to_numeric(df_numeric.index, errors='coerce')
-    df_numeric = df_numeric.dropna()
-    df_numeric['Count'] = pd.to_numeric(df_numeric['Count'], errors='coerce').fillna(0).astype(int)
-    
-    # Keep strictly values representing changes: > 0 and < nodata_val (255)
-    df_filtered = df_numeric[(df_numeric.index > 0) & (df_numeric.index < nodata_val)]
-    total_changing_pixels = df_filtered['Count'].sum()
+    # 4. Calculate percentages relative to the entire study area (excluding 0)
+    total_study_area_pixels = df_counts['Count'].sum()
 
-    if total_changing_pixels == 0:
-        print("Error: No changing pixels found for overall change frequency.")
+    if total_study_area_pixels == 0:
+        print("Error: No valid study area pixels found for overall change frequency.")
         return
 
     percentages = {}
-    for n_changes, row in df_filtered.iterrows():
+    for n_changes, row in df_counts.iterrows():
         count = row['Count']
         n_changes_int = int(n_changes)
-        pct = (count / total_changing_pixels) * 100.0
+        if n_changes_int == 0:
+            continue  # Exclude stable pixels (0 changes) from being plotted
+        
+        pct = (count / total_study_area_pixels) * 100.0
         percentages[n_changes_int] = pct
 
     # 4. Setup Colors
@@ -1439,26 +1435,28 @@ def export_global_number_of_changes_raster_task(
     if full_year_list is None:
         full_year_list = year_list
 
-    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
-    full_stack, _ = build_glance_stack(
-        year_list=full_year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=NODATA_VALUE
-    )
-    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+    # 1. Combine lists to build a single stack containing all required years safely
+    combined_years = sorted(list(set(year_list) | set(full_year_list)))
 
-    # 2. Build target stack for the specific years we want to export tasks for
-    target_stack, target_band_names = build_glance_stack(
-        year_list=year_list,
+    # 2. Build the master stack and extract the global mask based on the FULL timeline
+    master_stack, master_band_names = build_glance_stack(
+        year_list=combined_years,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
-        nodata_val=NODATA_VALUE
+        nodata_val=NODATA_VALUE,
     )
+    
+    # Create the global validity mask strictly using full_year_list bands
+    full_year_bands = [f"y{y}" for y in full_year_list]
+    full_stack_subset = master_stack.select(full_year_bands)
+    global_mask = full_stack_subset.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
+
+    # Build target bands list for changes calculation
+    target_band_names = [f"y{y}" for y in year_list]
 
     # 3. Shift the target stack by 1 band to compare t and t+1 in parallel (vectorized)
-    stack_t = target_stack.select(target_band_names[:-1])
-    stack_t1 = target_stack.select(target_band_names[1:])
+    stack_t = master_stack.select(target_band_names[:-1])
+    stack_t1 = master_stack.select(target_band_names[1:])
 
     # 4. Calculate total changes across the timeline
     change_count_img = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename(GLANCE_CLASS_BAND)
@@ -2265,8 +2263,11 @@ def export_trajectory_overall_csv_gee(
     # 3. Calculate overall trajectory using the consistent global mask
     trajectory_image = calculate_trajectory_gee(master_stack, target_band_names, global_mask, NODATA_VALUE)
 
+    # Ensure the final trajectory image is strictly masked by the same global validity mask before reducing
+    trajectory_image_masked = trajectory_image.updateMask(global_mask)
+
     # 4. Use frequencyHistogram to get counts for ALL categories (including 1) for a consistent denominator
-    histograms = trajectory_image.reduceRegion(
+    histograms = trajectory_image_masked.reduceRegion(
         reducer=ee.Reducer.frequencyHistogram().unweighted(),
         geometry=GLOBAL_GEOM,
         scale=scale,
@@ -2413,26 +2414,44 @@ def plot_trajectory_distribution(
         print(f"No valid GEE CSV data found in {input_dir}")
         return
 
-    # 3. Parse and extract only columns representing valid trajectory changes (2 to 5)
+    # 3. Determine the universal denominator
+    if total_pixels <= 0:
+        # Attempt to auto-locate Pixel_Counts_LULC_*.csv to build the denominator
+        lulc_patterns = os.path.join(
+            input_dir,
+            "Pixel_Counts_LULC_*.csv",
+        )
+        lulc_files = glob.glob(lulc_patterns)
+        if lulc_files:
+            lulc_path = sorted(lulc_files)[0]
+            print(f"Auto-detecting total area denominator from: {lulc_path}")
+            df_lulc = pd.read_csv(lulc_path)
+            cols_to_ignore = ["system:index", ".geo", "Period", "255"]
+            valid_cols = [
+                c for c in df_lulc.columns
+                if c not in cols_to_ignore
+            ]
+            total_pixels = int(df_lulc[valid_cols].sum().sum())
+            print(f"-> Auto-derived total valid pixels: {total_pixels:,.0f}")
+        else:
+            # Fallback to local sum of all trajectories (including stable)
+            total_pixels = int(df_overall.sum(axis=1).iloc[0])
+            print(f"Warning: Universal denominator not found. Defaulting to local sum: {total_pixels:,.0f}")
+
+    if total_pixels == 0:
+        print("Error: Total valid pixels for denominator is 0. Cannot plot.")
+        return
+
+    # Ensure only trajectory columns representing change (2 to 5) are selected
     traj_cols = [
         c for c in df_overall.columns
         if c.isdigit() and int(c) in [2, 3, 4, 5]
     ]
-    
-    # Force conversion of all values to float/int to handle GEE scientific notation (e.g., 3.06E7)
-    df_numeric_changes = df_overall[traj_cols].copy().astype(float)
-    df_numeric_changes.columns = [str(int(float(c))) for c in df_numeric_changes.columns]
-    
-    # Base denominator: sum strictly of trajectory changes 2, 3, 4, and 5 for the first row
-    total_changing_pixels = float(df_numeric_changes.iloc[0].sum())
+    df_numeric_changes = df_overall[traj_cols].copy()
 
-    if total_changing_pixels == 0:
-        print("Error: Total changing pixels for denominator is 0. Cannot plot.")
-        return
-
-    # Calculate percentages relative to the total changing area
+    # Calculate percentages relative to the universal total_pixels
     percentages = {
-        i: float((df_numeric_changes[str(i)].iloc[0] / total_changing_pixels) * 100.0)
+        i: float((df_numeric_changes[str(i)].iloc[0] / total_pixels) * 100.0)
         if str(i) in df_numeric_changes.columns else 0.0
         for i in [2, 3, 4, 5]
     }
@@ -2487,9 +2506,10 @@ def plot_trajectory_distribution(
     ax.set_xticks([])
 
     # Ensure the Y-axis headroom matches the cumulative height of all changes
+    max_y = bottom * 1.05 if bottom > 0 else 1.0
     ax.set_ylim(
         0,
-        105,
+        max_y,
     )
 
     ax.yaxis.set_major_locator(
