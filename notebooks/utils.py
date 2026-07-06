@@ -5272,33 +5272,38 @@ def export_alternation_shift_task_gee(
     Compute and export a raster representing the Alternation Shift Component using GEE.
     Calculated as: Total Changes - Quantity (Extension) - Total Exchange.
     """
+    if GLOBAL_GEOM is None:
+        raise ValueError(
+            "GLOBAL_GEOM is not initialized. Please call "
+            "utils.initialize_active_region(region_code) before running tasks."
+        )
+
     print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
 
     if full_year_list is None:
         full_year_list = year_list
 
-    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
-    full_stack, _ = build_glance_stack(
-        year_list=full_year_list,
+    # 1. Combine lists to build a single stack containing all required years safely
+    combined_years = sorted(list(set(year_list) | set(full_year_list)))
+
+    # 2. Build the master stack and extract the global mask based on the FULL timeline
+    master_stack, master_band_names = build_glance_stack(
+        year_list=combined_years,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
-    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+    
+    # Create the global validity mask strictly using full_year_list bands
+    full_year_bands = [f"y{y}" for y in full_year_list]
+    full_stack_subset = master_stack.select(full_year_bands)
+    global_mask = full_stack_subset.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
 
-    # 2. Build target stack for the specific years we want to export tasks for
-    target_stack, target_band_names = build_glance_stack(
-        year_list=year_list,
-        collection_id=GLANCE_COLLECTION_ID,
-        band_name=GLANCE_CLASS_BAND,
-        nodata_val=nodata_val,
-    )
-
-    # 3. Apply the global validity mask to ensure strict alignment
-    masked_stack = target_stack.updateMask(global_mask)
-
-    # 4. Extract aligned yearly images
-    imgs = [masked_stack.select(b).rename(GLANCE_CLASS_BAND) for b in target_band_names]
+    # 3. Extract aligned yearly images directly from the master stack by name and apply mask
+    imgs = [
+        master_stack.select(f"y{y}").rename(GLANCE_CLASS_BAND).updateMask(global_mask)
+        for y in year_list
+    ]
 
     # 4. Calculate Total Changes across all intervals
     total_changes = ee.Image(0).toUint8()
