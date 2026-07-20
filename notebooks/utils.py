@@ -6161,6 +6161,9 @@ def generate_all_heatmaps(
         if key == "sum":
             formatted_interval = interval_str.replace("-", "...")
             full_title = f"{base_name} {formatted_interval}"
+        elif "alt" in key:
+            formatted_interval = interval_str.replace("-", "...")
+            full_title = f"{base_name} ({formatted_interval})"
         else:
             full_title = f"{base_name} ({interval_str})"
 
