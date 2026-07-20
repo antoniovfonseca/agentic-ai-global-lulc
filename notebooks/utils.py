@@ -6158,14 +6158,11 @@ def generate_all_heatmaps(
             key.capitalize(),
         )
 
-        if key == "sum":
+        if key == "sum" or "alt" in key:
             formatted_interval = interval_str.replace("-", "...")
             full_title = f"{base_name} {formatted_interval}"
-        elif "alt" in key:
-            formatted_interval = interval_str.replace("-", "...")
-            full_title = f"{base_name} ({formatted_interval})"
         else:
-            full_title = f"{base_name} ({interval_str})"
+            full_title = f"{base_name} {interval_str}"
 
         out_file = os.path.join(
             charts_dir,
