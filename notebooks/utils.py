@@ -4001,7 +4001,7 @@ def plot_heatmap(
         )
 
         final_label = _unit_label(
-            "", # Remove o sufixo de unidade do rótulo principal da barra de cores
+            suffix, # Restaura a unidade descritiva entre parênteses no rótulo principal
             base_label=cbar_label,
         )
     except NameError:
