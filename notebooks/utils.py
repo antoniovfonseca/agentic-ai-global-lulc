@@ -3997,11 +3997,11 @@ def plot_heatmap(
         cbar.formatter = _unit_formatter(
             factor=factor,
             decimals=0,
-            suffix=suffix
+            suffix="" # Remove o sufixo de unidade dos ticks da barra de cores
         )
 
         final_label = _unit_label(
-            suffix,
+            "", # Remove o sufixo de unidade do rótulo principal da barra de cores
             base_label=cbar_label,
         )
     except NameError:
