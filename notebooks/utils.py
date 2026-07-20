@@ -6140,7 +6140,7 @@ def generate_all_heatmaps(
 
     title_map = {
         "ext": "Extent",
-        "sum": "Sum",
+        "sum": "Time Intervals",
         "all_exc": "Allocation Exchange",
         "alloc_shift": "Allocation Shift",
         "qty_shift": "Quantity & Allocation Shift",
@@ -6158,7 +6158,11 @@ def generate_all_heatmaps(
             key.capitalize(),
         )
 
-        full_title = f"{base_name} ({interval_str})"
+        if key == "sum":
+            formatted_interval = interval_str.replace("-", "...")
+            full_title = f"{base_name} {formatted_interval}"
+        else:
+            full_title = f"{base_name} ({interval_str})"
 
         out_file = os.path.join(
             charts_dir,
