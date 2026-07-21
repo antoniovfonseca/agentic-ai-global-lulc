@@ -4024,6 +4024,7 @@ def plot_heatmap(
                 fontsize=ann_fontsize,
                 show_diagonal=show_diagonal_values,
                 equalize_diagonal_font=equalize_diagonal_font,
+                vmax=vmax_eff,
             )
         except NameError:
             pass
