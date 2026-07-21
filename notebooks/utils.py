@@ -3488,8 +3488,9 @@ def annotate_heatmap(
     ax: plt.Axes,
     M: np.ndarray,
     fontsize: int = 8,
-    show_diagonal: bool = False,
+    show_diagonal: bool = True,
     equalize_diagonal_font: bool = False,
+    vmax: Optional[float] = None,
 ) -> None:
     """
     Annotate a heatmap with integer cell values and adaptive text color.
@@ -3507,22 +3508,19 @@ def annotate_heatmap(
         If False, skips the diagonal.
     equalize_diagonal_font : bool, optional
         If True, uses the same font size for all cells.
+    vmax : float, optional
+        The maximum scale value used to determine text color thresh.
     """
     if M.size == 0:
         return
 
-    m_off = M.copy()
-    np.fill_diagonal(m_off, np.nan)
-    data_off = m_off[np.isfinite(m_off)]
+    if vmax is None:
+        m_off = M.copy()
+        np.fill_diagonal(m_off, np.nan)
+        finite_vals = m_off[np.isfinite(m_off)]
+        vmax = float(np.nanmax(finite_vals)) if finite_vals.size > 0 else 1.0
 
-    if data_off.size > 0:
-        max_pos = float(np.max(data_off)) if np.any(data_off > 0) else 0.0
-        min_neg = float(np.min(data_off)) if np.any(data_off < 0) else 0.0
-    else:
-        max_pos, min_neg = 0.0, 0.0
-
-    thresh_pos = 0.5 * max_pos
-    thresh_neg = 0.5 * min_neg
+    thresh_red = 0.6 * vmax  # 60% of vmax is considered red in YlOrRd
     rows, cols = M.shape
 
     for i in range(rows):
@@ -3533,14 +3531,15 @@ def annotate_heatmap(
                 if not show_diagonal:
                     continue
                 color = "white"
+                current_fontsize = max(5, fontsize - 4)  # Make diagonal font smaller
             else:
-                if (val >= thresh_pos and val > 0) or (val <= thresh_neg and val < 0):
+                if val >= thresh_red and val > 0:
                     color = "white"
                 else:
                     color = "black"
+                current_fontsize = fontsize
 
             txt = f"{int(round(val))}"
-            current_fontsize = fontsize if equalize_diagonal_font else (fontsize - 3 if i == j else fontsize)
 
             ax.text(
                 j, i, txt, ha="center", va="center",
@@ -3622,7 +3621,7 @@ def plot_heatmap(
     cbar_label_fontsize: int = 14,
     xlabel: str = "To class",
     ylabel: str = "From class",
-    show_diagonal_values: bool = False,
+    show_diagonal_values: bool = True,
     equalize_diagonal_font: bool = False,
 ) -> None:
     """
@@ -3704,6 +3703,11 @@ def plot_heatmap(
     matrix_values = df.values.astype(
         float,
     )
+
+    # Force diagonal to 0 for Alternation Shift and Quantity & Allocation Shift matrices
+    title_clean = title.lower() if title else ""
+    if "alternation shift" in title_clean or "quantity" in title_clean:
+        np.fill_diagonal(matrix_values, 0.0)
 
     # 4. Prepare scale ignoring diagonal
     matrix_scale = matrix_values.copy()
