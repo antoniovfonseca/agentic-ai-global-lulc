@@ -3605,7 +3605,7 @@ def plot_heatmap(
     figsize: tuple = None,
     cmap: str = "YlOrRd",
     vmin: float = 0.0,
-    vmax: float = None,
+    vmax: float = 50_000_000.0,
     rotate_xticks_deg: int = 90,
     cbar_label: str = "Number of pixels",
     annotate: bool = True,
@@ -3957,13 +3957,7 @@ def plot_heatmap(
     )
 
     # 13. Determine Unit Scaling
-    max_abs = float(
-        np.nanmax(
-            np.abs(
-                finite_vals,
-            ),
-        ),
-    ) if finite_vals.size > 0 else 0.0
+    max_abs = vmax_eff
 
     if max_abs >= 1_000_000_000_000:
         factor = 1_000_000_000_000.0
@@ -6127,6 +6121,11 @@ def generate_all_heatmaps(
     print(
         "Generating Heatmaps...",
     )
+
+    # Enforce unified color scale and maximum value of 50 million pixels globally
+    style_config = style_config.copy()
+    style_config["vmax"] = 50_000_000.0
+    style_config["cmap"] = "YlOrRd"
 
     charts_dir = os.path.join(
         output_path,
