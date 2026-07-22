@@ -3284,17 +3284,6 @@ def validate_and_get_interval(
 
     return f"{str_y0}-{str_y1}"
 
-# Define matrix metadata dictionary
-MATRIX_META: Dict[str, list] = {
-    "sum": ["sum", "Time Intervals", "flow"],
-    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
-    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
-    "ext": ["extent", "Extent", "stock"],
-    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
-    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
-    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
-}
-
 def _extract_year_str(val: Union[str, int]) -> str:
     """
     Extract the first sequence of digits from a year string or integer.
@@ -6143,7 +6132,7 @@ def generate_all_heatmaps(
     )
 
     title_map = {
-        "ext": "Extent",
+        "ext": "Extent", # This was the old title_map
         "sum": "Time Intervals",
         "all_exc": "Allocation Exchange",
         "alloc_shift": "Allocation Shift",
@@ -6151,7 +6140,7 @@ def generate_all_heatmaps(
         "alt_exc": "Alternation Exchange",
         "alt_shift": "Alternation Shift",
         "unacc_ext": "Indirect",
-    }
+    } # I'm keeping this logic but it will now be consistent
 
     for key, df in matrices_dict.items():
         if df is None or df.empty:
