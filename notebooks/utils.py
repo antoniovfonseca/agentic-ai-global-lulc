@@ -6302,10 +6302,10 @@ def compute_and_save_components(
     # Alternation Shift (S) = max(0, A - X). Diagonal becomes zero.
     mat_s = np.maximum(0, alternation_raw - mat_x)
 
-    # Indirect (Unaccounted) Component (U)
-    # This is the balancing term from the identity u_r = max(0, -(m_r - x_r - e_r))
-    # which ensures that Alternation = X + S - U.
-    mat_u = np.maximum(0, -(alternation_raw - mat_x))
+    # Indirect (Unaccounted) Component (U), calculated from the identity:
+    # Sum = Extent + Alternation_Exchange + Alternation_Shift - Unaccounted
+    # Therefore: Unaccounted = Extent + Alternation_Exchange + Alternation_Shift - Sum
+    mat_u = mat_ext + mat_x + mat_s - mat_sum
 
     # 4. Consolidate and Export to CSV
     components = {
