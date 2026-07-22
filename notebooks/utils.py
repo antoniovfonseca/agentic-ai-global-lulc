@@ -6500,7 +6500,12 @@ def compute_and_save_components(
     # Alternation Shift (S) = max(0, A - X). Diagonal becomes zero.
     mat_s = np.maximum(0, alternation_raw - mat_x)
 
-    # 4. Export to CSV
+    # Indirect (Unaccounted) Component (U)
+    # This is the balancing term from the identity u_r = max(0, -(m_r - x_r - e_r))
+    # which ensures that Alternation = X + S - U.
+    mat_u = np.maximum(0, -(alternation_raw - mat_x))
+
+    # 4. Consolidate and Export to CSV
     components = {
         "sum": mat_sum,
         "extent": mat_ext,
@@ -6508,6 +6513,7 @@ def compute_and_save_components(
         "quantity_allocation_shift": mat_q,
         "alternation_exchange": mat_x,
         "alternation_shift": mat_s,
+        "unaccounted_extent": mat_u,  # Use key 'unaccounted_extent' for consistency with heatmap generator
     }
 
     for name, data in components.items():
