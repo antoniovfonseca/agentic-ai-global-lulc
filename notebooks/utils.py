@@ -6442,7 +6442,8 @@ def compute_and_save_components(
     Logic:
     1. Allocation: Derived from Extent matrix (Aggregate level).
     2. Alternation: Derived from (Sum - Extent) (Trajectory level).
-    Note: Shift components can be negative based on algebraic remainder.
+    This implementation follows the logic from Pontius et al. where the
+    diagonal (stability) is correctly handled for each component.
 
     Parameters
     ----------
@@ -6459,24 +6460,9 @@ def compute_and_save_components(
     -------
     None
     """
-    def _get_exchange_and_shift(
-        matrix: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Decompose matrix into positive Exchange and signed Shift."""
-        m_calc = matrix.copy()
-        np.fill_diagonal(m_calc, 0.0)
-        
-        # Exchange captures symmetrical swaps (always positive magnitude)
-        exchange = np.maximum(0, np.minimum(m_calc, m_calc.T))
-        
-        # Shift is the signed algebraic remainder
-        shift = m_calc - exchange
-        
-        return exchange, shift
-
     # 1. Align and Sort Matrices based on GLANCE_METADATA order
     name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
-    
+
     def _sort_key(label):
         if label in name_to_id:
             return (0, name_to_id[label])
@@ -6489,26 +6475,39 @@ def compute_and_save_components(
         list(set(df_sum.index).union(df_sum.columns)),
         key=_sort_key
     )
-    
+
     df_s = df_sum.reindex(index=all_labels, columns=all_labels).fillna(0.0)
     df_e = df_ext.reindex(index=all_labels, columns=all_labels).fillna(0.0)
 
-    # 2. Calculate Components
-    # Allocation: Based on direct Extent matrix
-    alloc_exc, alloc_shift = _get_exchange_and_shift(df_e.values)
+    # Convert to numpy arrays for calculation
+    mat_sum = df_s.values
+    mat_ext = df_e.values
 
-    # Alternation: Sum - Extent (Removes np.maximum to allow negative shifts)
-    alternation_raw = df_s.values - df_e.values
-    alt_exc, alt_shift = _get_exchange_and_shift(alternation_raw)
+    # 2. Calculate Allocation Components (from Extent matrix)
+    # Allocation Exchange (C) = min(E_ij, E_ji). This preserves the diagonal.
+    mat_c = np.minimum(mat_ext, mat_ext.T)
 
-    # 3. Export to CSV
+    # Quantity & Allocation Shift (Q) = E - C. Diagonal becomes zero.
+    mat_q = mat_ext - mat_c
+
+    # 3. Calculate Alternation Components (from Sum - Extent)
+    alternation_raw = mat_sum - mat_ext
+
+    # Alternation Exchange (X) = max(0, min(A_ij, A_ji)), where A = Sum - Extent.
+    # This also preserves the diagonal (S_ii - E_ii).
+    mat_x = np.maximum(0, np.minimum(alternation_raw, alternation_raw.T))
+
+    # Alternation Shift (S) = max(0, A - X). Diagonal becomes zero.
+    mat_s = np.maximum(0, alternation_raw - mat_x)
+
+    # 4. Export to CSV
     components = {
-        "sum": df_s.values,
-        "extent": df_e.values,
-        "allocation_exchange": alloc_exc,
-        "allocation_shift": alloc_shift,
-        "alternation_exchange": alt_exc,
-        "alternation_shift": alt_shift,
+        "sum": mat_sum,
+        "extent": mat_ext,
+        "allocation_exchange": mat_c,
+        "quantity_allocation_shift": mat_q,
+        "alternation_exchange": mat_x,
+        "alternation_shift": mat_s,
     }
 
     for name, data in components.items():
@@ -6517,11 +6516,11 @@ def compute_and_save_components(
             index=all_labels,
             columns=all_labels
         )
-        
+
         fname = f"transition_matrix_{name}_{period_label}.csv"
         path = os.path.join(output_dir, fname)
         df_out.to_csv(path)
-        
+
         print(f"Component saved: {fname}")
 
 ###############################################################################
