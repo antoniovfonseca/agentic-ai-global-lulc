@@ -2917,10 +2917,13 @@ def export_global_transition_tasks(
         img_start = master_stack.select(f"y{y1}").rename(GLANCE_CLASS_BAND).updateMask(global_mask)
         img_end = master_stack.select(f"y{y2}").rename(GLANCE_CLASS_BAND).updateMask(global_mask)
 
-        # 5. Create transition image: (Start * 100) + End
-        transition_image = img_start.multiply(100).add(img_end)
+        # 5. Create transition image: (Start * 100) + End.
+        # This now correctly includes stable pixels (e.g., 1*100 + 1 = 101)
+        # because we are no longer pre-filtering for inequality.
+        transition_image = img_start.multiply(100).add(img_end).rename("transition")
 
         # 6. Reduce the image to a frequency histogram (Table format)
+        # The histogram will now contain codes for both transitions and stability.
         # Using a Feature to wrap the result for CSV export
         transition_stats = transition_image.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram().unweighted(),
