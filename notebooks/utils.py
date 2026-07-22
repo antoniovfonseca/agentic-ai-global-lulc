@@ -6150,7 +6150,7 @@ def generate_all_heatmaps(
         "qty_shift": "Quantity & Allocation Shift",
         "alt_exc": "Alternation Exchange",
         "alt_shift": "Alternation Shift",
-        "unacc_ext": "Unaccounted Extent",
+        "unacc_ext": "Indirect",
     }
 
     for key, df in matrices_dict.items():
