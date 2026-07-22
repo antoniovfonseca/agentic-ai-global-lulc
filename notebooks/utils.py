@@ -5662,7 +5662,7 @@ MATRIX_META = {
     "ext": ["extent", "Extent", "stock"],
     "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
     "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
-    "unacc_ext": ["unaccounted_extent", "Unaccounted Extent", "stock"],
+    "unacc_ext": ["unaccounted_extent", "Indirect", "stock"],
 }
 
 def calculate_trajectory_gee(
