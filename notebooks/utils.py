@@ -6299,11 +6299,12 @@ def compute_and_save_components(
     # This also preserves the diagonal (S_ii - E_ii).
     mat_x = np.maximum(0, np.minimum(alternation_raw, alternation_raw.T))
 
-    # The remainder after exchange is decomposed into Shift (the positive part)
-    # and Unaccounted/Indirect (the positive of the negative part).
-    alternation_remainder = alternation_raw - mat_x
-    mat_s = np.maximum(0, alternation_remainder)
-    mat_u = np.maximum(0, -alternation_remainder)
+    # Alternation Shift (S) is the positive part of the remainder after exchange.
+    mat_s = np.maximum(0, alternation_raw - mat_x)
+
+    # Indirect (Unaccounted) Component (U) is calculated from the identity:
+    # U = E + X + S - V (where V is Sum)
+    mat_u = mat_ext + mat_x + mat_s - mat_sum
 
     # 4. Consolidate and Export all components to CSV
     components = {
