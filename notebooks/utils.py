@@ -6365,48 +6365,6 @@ class GlanceMosaicker:
         
         # Enforce uint8 casting to preserve data type limits
         return mosaicked_image.toByte()
-    for i in range(len(classes)):
-        for j in range(i + 1, len(classes)):
-            class_a = classes[i]
-            class_b = classes[j]
-
-            count_a_b = ee.Image(0)
-            count_b_a = ee.Image(0)
-
-            for t in range(len(imgs) - 1):
-                img_t = imgs[t]
-                img_t1 = imgs[t+1]
-
-                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
-                count_a_b = count_a_b.add(trans_a_b)
-
-                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
-                count_b_a = count_b_a.add(trans_b_a)
-
-            pair_exchange = count_a_b.min(count_b_a).multiply(2)
-            total_exchange = total_exchange.add(pair_exchange)
-
-    # 5. Calculate Alternation Shift (Changes - Quantity - Exchange)
-    # .max(0) ensures no negative values if discrepancies arise
-    shift = total_changes.subtract(quantity).subtract(total_exchange).max(0).toUint8()
-
-    # 6. Apply NoData and set properties
-    shift = shift.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
-
-    # 7. Define and start the Earth Engine export task
-    task_desc = f"Alternation_Shift_{year_list[0]}_{year_list[-1]}"
-    task = ee.batch.Export.image.toDrive(
-        image=shift,
-        description=task_desc,
-        folder=drive_folder,
-        scale=scale,
-        region=GLOBAL_GEOM,
-        maxPixels=1e13,
-    )
-
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
-    return task
 
 def plot_alternation_shift_map(
     output_dir: str,
