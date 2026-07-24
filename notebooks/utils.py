@@ -4735,111 +4735,197 @@ def plot_quantity_component_map(
     plt.show()
     print(f"Map figure saved successfully to: {output_figure_path}")
 
-def export_alternation_exchange_task_gee(
+
+def export_alternation_components_gee(
     year_list: list,
     drive_folder: str,
     scale: int = 300,
     nodata_val: int = 255,
     full_year_list: list = None,
-) -> ee.batch.Task:
+) -> list:
     """
-    Compute and export a raster representing the Alternation Exchange Component using GEE.
+    Computes and exports all three Alternation components (Exchange, Shift,
+    Unaccounted) by performing non-linear math at the pixel-scale before
+    spatial aggregation, following the Pontius methodology.
+
+    This function calculates the base Extent (E) and Sum (V) matrices
+    per-pixel once, and then derives X, S, and U from them, before launching
+    three separate GEE export tasks. A monitoring loop is included to
+    process tasks sequentially and avoid quota errors.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years for the analysis period (e.g., 2001 to 2019).
+    drive_folder : str
+        The destination folder in Google Drive for the output CSVs.
+    scale : int, optional
+        The spatial resolution in meters for the reduction, by default 300.
+    nodata_val : int, optional
+        The NoData value used for masking, by default 255.
+    full_year_list : list, optional
+        The complete timeline to construct the consistent global validity mask.
+        If None, `year_list` is used.
+
+    Returns
+    -------
+    list
+        A list of the three submitted ee.batch.Task objects.
     """
+    import time
+
     if GLOBAL_GEOM is None:
         raise ValueError(
             "GLOBAL_GEOM is not initialized. Please call "
             "utils.initialize_active_region(region_code) before running tasks."
         )
 
-    print(f"Preparing Alternation Exchange GEE Task for {year_list[0]}-{year_list[-1]}...")
-
     if full_year_list is None:
         full_year_list = year_list
 
-    # 1. Combine lists to build a single stack containing all required years safely
-    combined_years = sorted(list(set(year_list) | set(full_year_list)))
-
-    # 2. Build the master stack and extract the global mask based on the FULL timeline
-    master_stack, master_band_names = build_glance_stack(
-        year_list=combined_years,
+    print("Step 1/4: Building annual image stack and strict global mask...")
+    _, yearly_images_masked = build_global_valid_mask_and_yearly_images(
+        year_list=year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
         nodata_val=nodata_val,
     )
     
-    # Create the global validity mask strictly using full_year_list bands
-    full_year_bands = [f"y{y}" for y in full_year_list]
-    full_stack_subset = master_stack.select(full_year_bands)
-    global_mask = full_stack_subset.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+    # Extract images and global mask from the helper function's output
+    # The global mask is already applied to these images.
+    yearly_images = {year: img for year, img in yearly_images_masked}
+    global_mask = yearly_images_masked[0][1].mask() # Get mask from first image
 
-    # 3. Extract aligned yearly images directly from the master stack by name and apply mask
-    imgs = [
-        master_stack.select(f"y{y}").rename(GLANCE_CLASS_BAND).updateMask(global_mask)
-        for y in year_list
-    ]
+    img_start = yearly_images[year_list[0]]
+    img_end = yearly_images[year_list[-1]]
 
-    # 2. Get unique classes from metadata
-    # Note: GLANCE_METADATA must be defined in utils.py
+    print("Step 2/4: Calculating pixel-wise component bands (X, S, U)...")
     classes = list(GLANCE_METADATA.keys())
+    X_bands, S_bands, U_bands = [], [], []
 
-    # 3. Accumulate total exchange
-    total_exchange = ee.Image(0).toUint8()
+    # Efficiently create image stacks for vectorized calculations
+    img_stack_t = ee.Image([yearly_images[y] for y in year_list[:-1]])
+    img_stack_t1 = ee.Image([yearly_images[y] for y in year_list[1:]])
 
-    # Loop through all unique pairs of classes to find A->B and B->A exchanges
-    for i in range(len(classes)):
-        for j in range(i + 1, len(classes)):
-            class_a = classes[i]
-            class_b = classes[j]
+    for i in classes:
+        for j in classes:
+            b_name = f"T_{i}_{j}"
 
-            count_a_b = ee.Image(0)
-            count_b_a = ee.Image(0)
+            # --- E_ij and E_ji (Extent) ---
+            E_ij = img_start.eq(i).And(img_end.eq(j))
+            E_ji = img_start.eq(j).And(img_end.eq(i))
 
-            # Sum transitions over time
-            for t in range(len(imgs) - 1):
-                img_t = imgs[t]
-                img_t1 = imgs[t+1]
+            # --- V_ij and V_ji (Sum of Intervals) - Vectorized ---
+            V_ij = img_stack_t.eq(i).And(img_stack_t1.eq(j)).reduce(ee.Reducer.sum())
+            V_ji = img_stack_t.eq(j).And(img_stack_t1.eq(i)).reduce(ee.Reducer.sum())
 
-                # Transition A -> B
-                trans_a_b = img_t.eq(class_a).And(img_t1.eq(class_b))
-                count_a_b = count_a_b.add(trans_a_b)
+            # --- Pontius Equations (Pixel-wise) ---
+            # Unmask with 0 to allow subtraction, then re-mask at the end.
+            E_ij, E_ji = E_ij.unmask(0), E_ji.unmask(0)
+            V_ij, V_ji = V_ij.unmask(0), V_ji.unmask(0)
 
-                # Transition B -> A
-                trans_b_a = img_t.eq(class_b).And(img_t1.eq(class_a))
-                count_b_a = count_b_a.add(trans_b_a)
+            # Eq 7: Alternation Exchange (X_ij)
+            diff_ij = V_ij.subtract(E_ij)
+            diff_ji = V_ji.subtract(E_ji)
+            X_ij = diff_ij.min(diff_ji).max(0)
 
-            # Exchange for this pair is min(A->B, B->A)
-            # Multiplied by 2 because both directions contribute to the total exchange
-            # (matching the original Numba matrix addition logic)
-            pair_exchange = count_a_b.min(count_b_a).multiply(2)
+            # Eq 8: Alternation Shift (S_ij)
+            S_ij = V_ij.subtract(X_ij).subtract(E_ij).max(0)
 
-            total_exchange = total_exchange.add(pair_exchange)
+            # Eq 9: Unaccounted Extent (U_ij)
+            U_ij = E_ij.add(X_ij).add(S_ij).subtract(V_ij)
 
-    # 4. Apply NoData and set properties
-    total_exchange = total_exchange.unmask(nodata_val).set('system:no_data_value', nodata_val).toUint8()
+            # Append final bands for each component image
+            X_bands.append(X_ij.rename(b_name).updateMask(global_mask))
+            S_bands.append(S_ij.rename(b_name).updateMask(global_mask))
+            U_bands.append(U_ij.rename(b_name).updateMask(global_mask))
 
-    # 5. Define and start the Earth Engine export task
-    task_desc = f"Alternation_Exchange_{year_list[0]}_{year_list[-1]}"
-    task = ee.batch.Export.image.toDrive(
-        image=total_exchange,
-        description=task_desc,
-        folder=drive_folder,
-        scale=scale,
-        region=GLOBAL_GEOM,
-        maxPixels=1e13,
-    )
+    # Assemble the final multi-band images
+    img_X = ee.Image(X_bands)
+    img_S = ee.Image(S_bands)
+    img_U = ee.Image(U_bands)
 
-    task.start()
-    print(f"Task '{task_desc}' submitted to Google Earth Engine with NoData: {nodata_val}")
-    return task
+    component_images = {
+        "alternation_exchange": img_X,
+        "alternation_shift": img_S,
+        "unaccounted_extent": img_U,
+    }
 
-def plot_alternation_exchange_map(
+    print("Step 3/4: Reducing global area and configuring export tasks...")
+    tasks = []
+    for name, image in component_images.items():
+        totals = image.reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=GLOBAL_GEOM,
+            scale=scale,
+            crs="EPSG:4326",
+            maxPixels=1e13,
+            tileScale=16
+        )
+
+        fc = ee.FeatureCollection([ee.Feature(None, totals)])
+        task_name = f"transition_matrix_{name}_{year_list[0]}-{year_list[-1]}"
+
+        task = ee.batch.Export.table.toDrive(
+            collection=fc,
+            description=task_name,
+            folder=drive_folder,
+            fileNamePrefix=f"raw_{task_name}",
+            fileFormat="CSV"
+        )
+        tasks.append(task)
+
+    print("Step 4/4: Starting tasks sequentially to avoid quota errors...")
+    for task in tasks:
+        task.start()
+        print(f"🚀 Task started: {task.description}. Monitoring...")
+        while task.active():
+            minutes_ran = (time.time() - task.status()['start_timestamp_ms']/1000) / 60
+            print(
+                f"  -> Status: {task.status()['state']} "
+                f"({minutes_ran:.1f} minutes elapsed)"
+            )
+            time.sleep(60)
+
+        final_status = task.status()
+        if final_status['state'] != 'COMPLETED':
+            error_msg = final_status.get('error_message', 'No error message found.')
+            print(f"🚨 Task {task.description} failed: {error_msg}")
+            # Stop processing further tasks if one fails
+            raise Exception(f"Task {task.description} failed.")
+        else:
+            print(f"✅ Task {task.description} completed successfully.")
+
+    return tasks
+
+def plot_alternation_exchange_map(*args, **kwargs):
+    """This function is deprecated and its logic is now part of the new GEE implementation."""
+    print("This function is deprecated.")
+    pass
+
+def plot_alternation_shift_map(*args, **kwargs):
+    """This function is deprecated and its logic is now part of the new GEE implementation."""
+    print("This function is deprecated.")
+    pass
+
+def export_alternation_shift_task_gee(*args, **kwargs):
+    """This function is deprecated. Use export_alternation_components_gee instead."""
+    print("This function is deprecated. Use export_alternation_components_gee instead.")
+    return None
+
+def export_alternation_exchange_task_gee(*args, **kwargs):
+    """This function is deprecated. Use export_alternation_components_gee instead."""
+    print("This function is deprecated. Use export_alternation_components_gee instead.")
+    return None
+
+def plot_alternation_shift_map(
     output_dir: str,
     nodata_val: int,
     raster_filename: str,
     scale_factor: float = 0.05,
 ) -> None:
     """
-    Plot the Alternation Exchange raster map with cartographic elements.
+    Plot the Alternation Shift raster map with cartographic elements.
 
     Parameters
     ----------
@@ -4869,7 +4955,7 @@ def plot_alternation_exchange_map(
     # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
     vrt_path = os.path.join(
         output_dir,
-        "merged_exchange.vrt"
+        "merged_shift.vrt"
     )
     files_str = " ".join([f'"{f}"' for f in raster_files])
     os.system(f"gdalbuildvrt {vrt_path} {files_str}")
@@ -4893,10 +4979,7 @@ def plot_alternation_exchange_map(
         )
 
         # Force masking using the provided nodata value
-        data_masked = np.ma.masked_equal(
-            data,
-            nodata_val
-        )
+        data_masked = np.ma.masked_equal(data, nodata_val)
 
         src_crs = src.crs
         # Adjust the affine transform for the new downsampled resolution
@@ -4964,7 +5047,7 @@ def plot_alternation_exchange_map(
         frameon=False,
         fontsize=12,
         borderpad=1.2,
-        title="Exchange",
+        title="Shift",
         title_fontsize=14,
         alignment="left",
         handletextpad=0.8,
@@ -5006,7 +5089,7 @@ def plot_alternation_exchange_map(
 
     # 10. Axes styling
     ax.set_title(
-        "Alternation Exchange",
+        "Alternation Shift",
         fontsize=18,
         pad=10
     )
@@ -5059,7 +5142,7 @@ def plot_alternation_exchange_map(
     )
     output_figure_path = os.path.join(
         maps_dir,
-        "map_alternation_exchange.png"
+        "map_alternation_shift.png"
     )
 
     plt.savefig(
@@ -5072,16 +5155,1043 @@ def plot_alternation_exchange_map(
     plt.show()
     print(f"Map figure saved successfully to: {output_figure_path}")
 
-def export_alternation_shift_task_gee(
+
+
+
+
+
+def load_and_reorder_matrices(output_path: str, year_list: list) -> Dict[str, Any]:
+    """
+    Load transition matrices from CSVs and reorder them based on sum net change.
+
+    Parameters
+    ----------
+    output_path : str
+        Base directory path where the matrix CSV files are stored.
+    year_list : list
+        List of years representing the timeline (e.g., [2001, 2010, 2019]).
+
+    Returns
+    -------
+    dict
+        Dictionary containing the loaded and reordered matrices.
+    """
+    matrices = {}
+
+    interval_str = f"{year_list[0]}-{year_list[-1]}"
+
+    for key, meta in MATRIX_META.items():
+        # Look directly in the output_path instead of the 'tables' subfolder
+        csv_path = os.path.join(output_path, f"transition_matrix_{meta[0]}_{interval_str}.csv")
+        
+        if os.path.exists(csv_path):
+            matrices[key] = load_square_matrix(csv_path=csv_path)
+        else:
+            print(f"Warning: Matrix file not found at {csv_path}")
+
+    if matrices:
+        matrices = reorder_all_matrices(matrices_dict=matrices)
+
+    return matrices
+
+# Define matrix metadata dictionary globally for reuse
+MATRIX_META = {
+    "sum": ["sum", "Time Intervals", "flow"],
+    "alt_exc": ["alternation_exchange", "Alternation Exchange", "flow"],
+    "alt_shift": ["alternation_shift", "Alternation Shift", "flow"],
+    "ext": ["extent", "Extent", "stock"],
+    "all_exc": ["allocation_exchange", "Allocation Exchange", "stock"],
+    "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
+    "unacc_ext": ["unaccounted_extent", "Indirect", "stock"],
+}
+
+def calculate_trajectory_gee(
+    image_stack: ee.Image,
+    band_names: list,
+    global_mask: ee.Image,
+    nodata_val: int = NODATA_VALUE,
+) -> ee.Image:
+    """
+    Classify a single pixel trajectory into five categories based on mathematical logic using GEE.
+
+    Parameters
+    ----------
+    image_stack : ee.Image
+        An ee.Image where each band represents a chronological time step.
+    band_names : list
+        A list of strings representing the ordered band names in the stack.
+    nodata_val : int, optional
+        NoData value to be masked out at the end, by default NODATA_VALUE (255).
+
+    Returns
+    -------
+    ee.Image
+        An ee.Image containing the classified trajectory codes (1 to 5).
+    """
+    # 0. Apply the global validity mask to the image stack at the very beginning
+    # This ensures all subsequent operations work on a consistent set of valid pixels.
+    masked_image_stack = image_stack.updateMask(global_mask)
+
+    # 1. Extract the start and end images from the stack
+    start_img = masked_image_stack.select(band_names[0])
+    end_img = masked_image_stack.select(band_names[-1])
+
+    # 2. Check if the start class equals the end class
+    start_equals_end = start_img.eq(end_img)
+
+    # 3. Shift the stack by 1 band to compare t and t+1 in parallel (vectorized)
+    common_names = [f"b_{i}" for i in range(len(band_names) - 1)]
+    stack_t = masked_image_stack.select(band_names[:-1]).rename(common_names)
+    stack_t1 = masked_image_stack.select(band_names[1:]).rename(common_names)
+
+    # 4. Check for a direct transition and path changes using native multi-band operations
+    start_img_stack = ee.Image.cat([start_img] * len(common_names)).rename(common_names)
+    end_img_stack = ee.Image.cat([end_img] * len(common_names)).rename(common_names)
+
+    has_direct_transition = stack_t.eq(start_img_stack).And(stack_t1.eq(end_img_stack)).unmask(0).reduce(ee.Reducer.max())
+    path_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum())
+
+    # 5. Deduce all_match_start mathematically from path_changes (0 changes means completely stable)
+    all_match_start = path_changes.eq(0)
+
+    # 6. Assign Trajectory 1 for completely stable pixels
+    traj_1 = start_equals_end.And(all_match_start).multiply(1)
+
+    # 7. Assign Trajectory 2 for stable extent with alternation
+    traj_2 = start_equals_end.And(all_match_start.Not()).multiply(2)
+
+    # 8. Identify pixels with extent change
+    extent_change = start_equals_end.Not()
+
+    # 9. Assign Trajectory 5 for extent change without direct transition
+    traj_5 = extent_change.And(has_direct_transition.Not()).multiply(5)
+
+    # 10. Assign Trajectory 3 for extent change without alternation
+    traj_3 = extent_change.And(has_direct_transition).And(path_changes.eq(1)).multiply(3)
+
+    # 11. Assign Trajectory 4 for extent change with alternation
+    traj_4 = extent_change.And(has_direct_transition).And(path_changes.gt(1)).multiply(4)
+
+    # 12. Combine all trajectory maps into a single output image
+    trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
+
+    # 13. Apply the global validity mask
+    # The global_mask is already applied to the stack, so this final mask is redundant.
+
+    return trajectory_image.rename('trajectory')
+
+def build_glance_stack(
+    year_list: list,
+    collection_id: str,
+    band_name: str,
+    nodata_val: int,
+) -> tuple:
+    """
+    Build an Earth Engine image stack from the specified collection,
+    without pre-applying complex global masks to keep the computation graph clean.
+
+    Parameters
+    ----------
+    year_list : list
+        List of integer years to process.
+    collection_id : str
+        The GEE ImageCollection ID.
+    band_name : str
+        The band name to select.
+    nodata_val : int
+        The NoData value to mask out.
+
+    Returns
+    -------
+    tuple
+        A tuple containing the ee.Image stack and the list of band names.
+    """
+    collection = ee.ImageCollection(collection_id).select(band_name)
+    images = []
+    b_names = []
+
+    for year in year_list:
+        b_name = f"y{year}"
+        b_names.append(b_name)
+        
+        img = collection.filter(ee.Filter.calendarRange(year, year, "year")).mosaic()
+        images.append(
+            img.rename(b_name)
+        )
+
+    stack = ee.Image(images)
+
+    return stack, b_names
+
+
+###############################################################################
+#                                                                             #
+#                  5.1 CHANGE COMPONENTS                                      #
+#                                                                             #
+###############################################################################
+
+def export_interval_transition_matrices_gee(
+    year_list: list,
+    drive_folder: str,
+    collection_id: str,
+    band_name: str,
+    scale: int = 300,
+    nodata_val: int = 255,
+    full_year_list: list = None,
+) -> list:
+    """
+    Export LULC transition matrices between consecutive years to Google Drive.
+
+    Parameters
+    ----------
+    year_list : list
+        List of years representing the timeline.
+    drive_folder : str
+        Google Drive folder name for the exported CSV files.
+    collection_id : str
+        GEE ImageCollection ID containing the LULC rasters.
+    band_name : str
+        Band name representing the LULC classes.
+    scale : int, optional
+        Spatial resolution for the export, by default 300.
+    full_year_list : list of int, optional
+        The complete timeline to construct the consistent global validity mask.
+    nodata_val : int, optional
+        Value representing NoData/Background to be masked out, by default 255.
+
+    Returns
+    -------
+    list
+        List of submitted ee.batch.Task objects.
+    """
+    tasks = []
+
+    if full_year_list is None:
+        full_year_list = year_list
+
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
+    global_mask = full_stack.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=collection_id,
+        band_name=band_name,
+        nodata_val=nodata_val,
+    )
+
+    yearly_by_year = {
+        year: target_stack.select(target_band_names[idx]).rename(band_name)
+        for idx, year in enumerate(year_list)
+    }
+
+    for i in range(len(year_list) - 1):
+        start_year = year_list[i]
+        end_year = year_list[i + 1]
+
+        img_start = yearly_by_year[start_year].updateMask(global_mask)
+        img_end = yearly_by_year[end_year].updateMask(global_mask)
+
+        transition_img = img_start.multiply(100).add(img_end).rename("transition")
+
+        histogram = transition_img.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram().unweighted(),
+            geometry=GLOBAL_GEOM,
+            scale=scale,
+            crs="EPSG:4326",
+            maxPixels=1e13,
+            tileScale=16,
+        )
+
+        feature = ee.Feature(None, histogram)
+        fc = ee.FeatureCollection([feature])
+
+        task_name = f"transition_{start_year}_{end_year}"
+        task = ee.batch.Export.table.toDrive(
+            collection=fc,
+            description=task_name,
+            folder=drive_folder,
+            fileNamePrefix=f"transition_matrix_{start_year}-{end_year}",
+            fileFormat="CSV",
+        )
+        task.start()
+        tasks.append(task)
+
+    return tasks
+
+def format_raw_gee_csv_to_matrix(
+    raw_csv_path: str,
+    final_csv_path: str,
+    classes: list = None
+) -> None:
+    """
+    Reads a raw GEE CSV with 49 transition bands (T_i_j) and formats it
+    into a standard 7x7 transition matrix CSV.
+
+    Parameters
+    ----------
+    raw_csv_path : str
+        Path to the raw input CSV file exported from GEE.
+    final_csv_path : str
+        Path to save the formatted 7x7 matrix CSV file.
+    classes : list, optional
+        List of class IDs to use for the matrix index and columns.
+        If None, defaults to the keys from GLANCE_METADATA.
+    """
+    if not os.path.exists(raw_csv_path):
+        print(f"⚠️ Raw GEE file not found, skipping format: {raw_csv_path}")
+        return
+
+    if classes is None:
+        classes = list(GLANCE_METADATA.keys())
+
+    df_raw = pd.read_csv(raw_csv_path)
+    matrix = pd.DataFrame(0.0, index=classes, columns=classes)
+
+    for i in classes:
+        for j in classes:
+            col_name = f"T_{i}_{j}"
+            if col_name in df_raw.columns:
+                # Ensure value is numeric, default to 0 if not
+                value = pd.to_numeric(df_raw.loc[0, col_name], errors='coerce')
+                matrix.at[i, j] = value if pd.notna(value) else 0.0
+
+    # Ensure the output directory exists
+    output_dir = os.path.dirname(final_csv_path)
+    os.makedirs(output_dir, exist_ok=True)
+
+    matrix.to_csv(final_csv_path)
+    print(f"✅ Formatted 7x7 matrix saved to: {final_csv_path}")
+
+def parse_gee_raw_csv(file_path: str) -> pd.DataFrame:
+    """
+    Parse a raw GEE transition CSV into a square Pandas DataFrame matrix.
+    """
+    df_raw = pd.read_csv(file_path)
+    dict_str = None
+    for col in df_raw.columns:
+        val = str(df_raw[col].iloc[0])
+        if val.startswith("{") and "=" in val:
+            dict_str = val
+            break
+
+    if not dict_str:
+        raise ValueError(f"Raw GEE dictionary string not found in {file_path}.")
+
+    dict_str = dict_str.strip("{}")
+    pairs = dict_str.split(", ")
+
+    transitions = {}
+    classes = set()
+
+    for pair in pairs:
+        if not pair:
+            continue
+        k, v = pair.split("=")
+        if k.strip().lower() == "null":
+            continue
+        k_int = int(k)
+        val_float = float(v)
+        # For GLanCE, transition classes are encoded as start * 100 + end
+        s_c = k_int // 100
+        e_c = k_int % 100
+        transitions[(s_c, e_c)] = val_float
+        classes.add(s_c)
+        classes.add(e_c)
+
+    classes_sorted = sorted(list(classes))
+    df_mat = pd.DataFrame(0.0, index=classes_sorted, columns=classes_sorted)
+
+    for (s, e), v in transitions.items():
+        df_mat.at[s, e] = v
+
+    return df_mat
+
+class ComponentCalculator:
+    """
+    Compute change components for a matrix.
+
+    Supports pre-decomposed matrices via force_component parameter.
+    """
+
+    def __init__(self, transition_matrix: np.ndarray) -> None:
+        """
+        Initialize the calculator with a transition matrix.
+
+        Parameters
+        ----------
+        transition_matrix : np.ndarray
+            Square matrix representing transitions.
+        """
+        self.matrix = transition_matrix.astype(float)
+        self.num_classes = transition_matrix.shape[0]
+        self.class_components: list[dict] = []
+
+    def calculate_components(self, force_component: str = None) -> "ComponentCalculator":
+        """
+        Calculate gain, loss, exchange, and shift for all classes.
+
+        Parameters
+        ----------
+        force_component : str, optional
+            If set to "Exchange" or "Shift", forces the interpretation of the
+            matrix content to that specific component.
+
+        Returns
+        -------
+        ComponentCalculator
+            Returns self for chaining.
+        """
+        for class_idx in range(self.num_classes):
+            gain_sum = np.sum(self.matrix[:, class_idx])
+            loss_sum = np.sum(self.matrix[class_idx, :])
+
+            # Standard net change calculation
+            q_gain = max(0.0, gain_sum - loss_sum)
+            q_loss = max(0.0, loss_sum - gain_sum)
+
+            if force_component == "Exchange":
+                exchange = loss_sum - self.matrix[class_idx, class_idx]
+                shift = 0.0
+                q_gain, q_loss = gain_sum - loss_sum, loss_sum - gain_sum
+            elif force_component == "Shift":
+                exchange = 0.0
+                shift = loss_sum - self.matrix[class_idx, class_idx]
+                q_gain, q_loss = 0.0, 0.0
+            else:
+                # Standard Pontius decomposition
+                mutual = np.sum(np.minimum(self.matrix[class_idx, :], self.matrix[:, class_idx]))
+                exchange = mutual - self.matrix[class_idx, class_idx]
+                total_trans = loss_sum - self.matrix[class_idx, class_idx]
+                shift = total_trans - q_loss - exchange
+
+            self.class_components.append({
+                "Quantity_Gain": q_gain,
+                "Quantity_Loss": q_loss,
+                "Exchange_Gain": exchange,
+                "Exchange_Loss": exchange,
+                "Shift_Gain": shift,
+                "Shift_Loss": shift,
+            })
+        return self
+
+
+def process_matrix(
+    matrix_type: str,
+    input_dir: str,
+    years_list: list,
+    class_labels_dict: dict,
+    start_year=None,
+    end_year=None,
+) -> list:
+    """
+    Search for a transition matrix file and calculate its change components.
+
+    Parameters
+    ----------
+    matrix_type : str
+        Type of matrix ("interval", "extent", "sum", etc.).
+    input_dir : str
+        Directory where CSV files are stored.
+    years_list : list
+        List of all years in the timeline.
+    class_labels_dict : dict
+        Dictionary mapping class IDs to metadata.
+    start_year : str or int, optional
+        Start year for interval matrices.
+    end_year : str or int, optional
+        End year for interval matrices.
+
+    Returns
+    -------
+    list[dict]
+        List of dictionaries containing component values per class.
+    """
+    results = []
+    patterns = []
+
+    # 1. Determine naming patterns to search for
+    if matrix_type == "interval":
+        s_str, e_str = str(start_year), str(end_year)
+        patterns.extend([
+            f"transition_{s_str}_{e_str}.csv",
+            f"transition_matrix_{s_str}-{e_str}.csv",
+        ])
+        label_time = f"{s_str}-{e_str}"
+    else:
+        y0_str, yN_str = str(years_list[0]), str(years_list[-1])
+        patterns.extend([
+            f"transition_matrix_{matrix_type}_{y0_str}-{yN_str}.csv",
+        ])
+        label_time = matrix_type
+
+    # 2. Find the existing file in the main directory
+    full_path = None
+    for p in patterns:
+        path = os.path.join(input_dir, p)
+        if os.path.exists(path):
+            full_path = path
+            break
+
+    if not full_path:
+        return []
+
+    # 3. Process components
+    force_comp = (
+        "Exchange" if "exchange" in matrix_type else ("Shift" if "shift" in matrix_type else None)
+    )
+
+    # Load matrix safely handling standard square CSVs or raw GEE dict formats
+    try:
+        df_mat = pd.read_csv(full_path, index_col=0)
+        if df_mat.shape[1] > 0 and isinstance(df_mat.iloc[0, 0], str) and df_mat.iloc[0, 0].startswith("{"):
+            raise ValueError("Raw GEE format detected")
+    except (ValueError, TypeError):
+        # Assumes parse_gee_raw_csv is defined in utils.py from the previous step
+        df_mat = parse_gee_raw_csv(full_path)
+
+    calc = ComponentCalculator(df_mat.values).calculate_components(force_component=force_comp)
+
+    for idx, class_id in enumerate([int(c) for c in df_mat.index]):
+        cls_name = class_labels_dict.get(class_id, {}).get("name", f"Class {class_id}")
+        comp_vals = calc.class_components[idx]
+
+        for comp_name in ["Quantity", "Exchange", "Shift"]:
+            label_comp = comp_name
+            if matrix_type in ["extent", "sum"]:
+                label_comp = f"Allocation_{comp_name}"
+            if "alternation" in matrix_type:
+                label_comp = f"Alternation_{comp_name}"
+
+            results.append({
+                "Time_Interval": label_time,
+                "Class": cls_name,
+                "Component": label_comp,
+                "Gain": comp_vals[f"{comp_name}_Gain"],
+                "Loss": comp_vals[f"{comp_name}_Loss"],
+            })
+    return results
+
+def generate_all_heatmaps(
+    matrices_dict: dict,
+    output_path: str,
+    interval_str: str,
+    years: list,
+    style_config: dict,
+) -> None:
+    """
+    Iterate over the matrices dictionary and generate a heatmap for each.
+
+    Parameters
+    ----------
+    matrices_dict : dict
+        Dictionary containing the dataframes to plot.
+    output_path : str
+        Base directory path to save the generated charts.
+    interval_str : str
+        String representing the time interval.
+    years : list
+        List of years processed.
+    style_config : dict
+        Dictionary containing style configurations for the plot.
+
+    Returns
+    -------
+    None
+    """
+    import os
+
+    print(
+        "Generating Heatmaps...",
+    )
+
+    # Enforce unified color scale and maximum value of 50 million pixels globally
+    style_config = style_config.copy()
+    style_config["vmax"] = 50_000_000.0
+    style_config["cmap"] = "YlOrRd"
+
+    charts_dir = os.path.join(
+        output_path,
+        "charts",
+    )
+
+    os.makedirs(
+        charts_dir,
+        exist_ok=True,
+    )
+
+    title_map = {
+        "ext": "Extent", # This was the old title_map
+        "sum": "Time Intervals",
+        "all_exc": "Allocation Exchange",
+        "alloc_shift": "Allocation Shift",
+        "qty_shift": "Quantity & Allocation Shift",
+        "alt_exc": "Alternation Exchange",
+        "alt_shift": "Alternation Shift",
+        "unacc_ext": "Indirect",
+    } # I'm keeping this logic but it will now be consistent
+
+    for key, df in matrices_dict.items():
+        if df is None or df.empty:
+            continue
+
+        base_name = title_map.get(
+            key,
+            key.capitalize(),
+        )
+
+        if key == "sum" or "alt" in key:
+            formatted_interval = interval_str.replace("-", "...")
+            full_title = f"{base_name} {formatted_interval}"
+        else:
+            full_title = f"{base_name} {interval_str}"
+
+        out_file = os.path.join(
+            charts_dir,
+            f"heatmap_{key}_{interval_str}.png",
+        )
+
+        plot_heatmap(
+            df=df,
+            title=full_title,
+            save_path=out_file,
+            **style_config
+        )
+
+        print(
+            f"-> Saved heatmap: {out_file}",
+        )
+
+
+
+
+
+
+
+###############################################################################
+#                                                                             #
+#                  6. Convert CSV to Transition Matrix                        #
+#                                                                             #
+###############################################################################
+
+def load_global_transition_matrices(
+    drive_path
+):
+    """
+    Loads exported GEE CSVs from Drive and converts them to transition matrices.
+
+    Parameters
+    ----------
+    drive_path : str
+        The full path to the Google Drive folder containing the CSV files.
+
+    Returns
+    -------
+    dict of pd.DataFrame
+        A dictionary where keys are 'YYYY_YYYY' and values are pivot matrices.
+    """
+
+    # 1. Identify all CSV files in the specified directory
+    search_pattern = os.path.join(drive_path, "*.csv")
+    file_list = glob.glob(search_pattern)
+    
+    # 2. Create a mapping of class IDs to names from metadata
+    class_names = {
+        k: v['name'] 
+        for k, v in GLANCE_METADATA.items()
+    }
+    
+    all_matrices = {}
+
+    # 3. Iterate through each file to reconstruct the matrix
+    for filepath in file_list:
+        df_raw = pd.read_csv(filepath)
+        
+        # 4. Extract the transition label from the filename
+        filename = os.path.basename(filepath)
+        label = filename.replace(".csv", "").replace("transition_", "")
+        
+        hist_data = {}
+        numeric_cols = [c for c in df_raw.columns if str(c).isdigit()]
+        
+        # 5. Parse the histogram
+        if numeric_cols:
+            for col in numeric_cols:
+                hist_data[col] = df_raw[col].sum()
+        else:
+            target_col = 'LC' if 'LC' in df_raw.columns else 'transition'
+            if target_col not in df_raw.columns:
+                continue
+            hist_str = str(df_raw[target_col].iloc[0])
+            clean_str = hist_str.strip('{}')
+            pairs = clean_str.split(', ')
+            for pair in pairs:
+                if '=' in pair:
+                    k, v = pair.split('=')
+                    hist_data[k] = float(v)
+
+        records = []
+        
+        # 6. Decode transition codes into 'From' and 'To' classes
+        for code, count in hist_data.items():
+            code_int = int(float(code))
+            id_from = code_int // 100
+            id_to = code_int % 100
+
+            # 7. Filter records using valid metadata classes
+            if id_from in class_names and id_to in class_names:
+                records.append({
+                    "From": class_names[id_from],
+                    "To": class_names[id_to],
+                    "Pixels": int(count)
+                })
+
+        # 8. Pivot the records into a formal transition matrix
+        if records:
+            df_temp = pd.DataFrame(records)
+            matrix = df_temp.pivot(
+                index="From", 
+                columns="To", 
+                values="Pixels"
+            ).fillna(0)
+
+            # 9. Store the resulting DataFrame in the output dictionary
+            all_matrices[label] = matrix
+            
+    return all_matrices
+
+def convert_matrices_to_area(
+    matrices_dict,
+    pixel_size=30
+):
+    """
+    Converts pixel counts in transition matrices to area in square kilometers.
+
+    Parameters
+    ----------
+    matrices_dict : dict of pd.DataFrame
+        A dictionary where values are transition matrices in pixel counts.
+    pixel_size : int, optional
+        The edge length of a single pixel in meters. Defaults to 30.
+
+    Returns
+    -------
+    dict of pd.DataFrame
+        A dictionary of transition matrices with values in km^2.
+    """
+    # 1. Calculate the conversion factor from pixels to km^2
+    # Area of one pixel in m^2 = pixel_size * pixel_size
+    # Conversion to km^2 = m^2 / 1,000,000
+    conversion_factor = (pixel_size ** 2) / 1000000
+    
+    area_matrices = {}
+
+    # 2. Iterate through the dictionary of matrices
+    for label, matrix in matrices_dict.items():
+        # 3. Multiply the entire DataFrame by the conversion factor
+        # Pandas handles the element-wise multiplication automatically
+        area_matrix = matrix * conversion_factor
+        
+        # 4. Round the results to two decimal places for readability
+        area_matrices[label] = area_matrix.round(2)
+        
+    return area_matrices
+
+def save_area_matrices_to_csv(
+    area_matrices,
+    output_dir
+):
+    """
+    Saves a dictionary of area matrices to individual CSV files.
+
+    Parameters
+    ----------
+    area_matrices : dict of pd.DataFrame
+        Dictionary containing the transition matrices in km^2.
+    output_dir : str
+        The directory path where the CSV files will be saved.
+
+    Returns
+    -------
+    list of str
+        A list of file paths to the saved CSV files.
+    """
+    # 1. Check if the output directory exists and create it if necessary
+    if not os.path.exists(output_dir):
+        os.makedirs(
+            output_dir, 
+            exist_ok=True
+        )
+    
+    saved_files = []
+
+    # 2. Iterate through the dictionary to process each transition matrix
+    for label, matrix in area_matrices.items():
+        # 3. Construct the specific filename for the km2 results
+        filename = f"transition_matrix_km2_{label}.csv"
+        filepath = os.path.join(
+            output_dir, 
+            filename
+        )
+        
+        # 4. Save the DataFrame to CSV including the class names in the index
+        matrix.to_csv(
+            filepath,
+            index=True
+        )
+        
+        saved_files.append(filepath)
+        print(f"Successfully saved: {filename}")
+        
+    return saved_files
+
+###############################################################################
+#                                                                             #
+#                  7. Compute Sum matrix                                      #
+#                                                                             #
+###############################################################################
+
+def compute_sum_matrix(
+    input_dir: str,
+    output_path: str,
+    file_prefix: str = "transition_",
+) -> pd.DataFrame:
+    """
+    Compute the SUM transition matrix by aggregating all annual intervals.
+
+    Parameters
+    ----------
+    input_dir : str
+        Path to the directory containing annual transition CSV files.
+    output_path : str
+        Full path (including filename) to save the resulting SUM matrix.
+    file_prefix : str, optional
+        Prefix of the annual transition files to look for, by default "transition_".
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated SUM transition matrix.
+    """
+    # 1. List all annual transition files (e.g., transition_2001_2002.csv, transition_2002_2003.csv...)
+    pattern_underscore = os.path.join(input_dir, f"{file_prefix}????_????.csv")
+    pattern_hyphen = os.path.join(input_dir, f"{file_prefix}????-????.csv")
+    
+    all_files = glob.glob(pattern_underscore) + glob.glob(pattern_hyphen)
+
+    if not all_files:
+        raise FileNotFoundError(
+            f"No annual transition matrices found in {input_dir} with prefix '{file_prefix}'",
+        )
+
+    # 2. Sort files to ensure chronological order (optional, but good practice)
+    all_files.sort()
+
+    df_sum = None
+
+    # 3. Iterate and aggregate
+    for file_path in all_files:
+        # Load current annual matrix (using load_square_matrix to handle raw/square formats)
+        df_annual = load_square_matrix(file_path)
+
+        if df_sum is None:
+            # Initialize with the first matrix
+            df_sum = df_annual.copy()
+        else:
+            # Sum values cell by cell
+            df_sum = df_sum.add(
+                df_annual,
+                fill_value=0.0,
+            )
+
+    # 4. Save the consolidated SUM matrix
+    if df_sum is not None:
+        df_sum.to_csv(output_path)
+        print(f"SUM matrix successfully saved to: {output_path}")
+
+    return df_sum
+
+###############################################################################
+#                                                                             #
+#                  8. Compute Exchange and Shift                              #
+#                                                                             #
+###############################################################################
+def compute_and_save_components(
+    df_sum: pd.DataFrame,
+    df_ext: pd.DataFrame,
+    output_dir: str,
+    period_label: str = "2001-2019",
+) -> None:
+    """
+    Decompose Sum and Extent matrices into change components.
+
+    Logic:
+    1. Allocation: Derived from Extent matrix (Aggregate level).
+    2. Alternation: Derived from (Sum - Extent) (Trajectory level).
+    This implementation follows the logic from Pontius et al. where the
+    diagonal (stability) is correctly handled for each component.
+
+    Parameters
+    ----------
+    df_sum : pd.DataFrame
+        Aggregated transition matrix (Sum of annual intervals).
+    df_ext : pd.DataFrame
+        Direct transition matrix (Start year vs End year).
+    output_dir : str
+        Directory path to save the resulting CSV files.
+    period_label : str, optional
+        Year range label for filename, by default "2001-2019".
+
+    Returns
+    -------
+    None
+    """
+    # 1. Align and Sort Matrices based on GLANCE_METADATA order
+    name_to_id = {v['name']: k for k, v in GLANCE_METADATA.items()}
+
+    def _sort_key(label):
+        if label in name_to_id:
+            return (0, name_to_id[label])
+        try:
+            return (0, int(label))
+        except (ValueError, TypeError):
+            return (1, str(label))
+
+    all_labels = sorted(
+        list(set(df_sum.index).union(df_sum.columns)),
+        key=_sort_key
+    )
+
+    df_s = df_sum.reindex(index=all_labels, columns=all_labels).fillna(0.0)
+    df_e = df_ext.reindex(index=all_labels, columns=all_labels).fillna(0.0)
+
+    # Convert to numpy arrays for calculation
+    mat_sum = df_s.values
+    mat_ext = df_e.values
+
+    # 2. Calculate Allocation Components (from Extent matrix)
+    # Allocation Exchange (C) = min(E_ij, E_ji). This preserves the diagonal.
+    mat_c = np.minimum(mat_ext, mat_ext.T)
+
+    # Quantity & Allocation Shift (Q) = E - C. Diagonal becomes zero.
+    mat_q = mat_ext - mat_c
+
+    # 3. Calculate Alternation Components (from Sum - Extent)
+    alternation_raw = mat_sum - mat_ext
+
+    # Alternation Exchange (X) = max(0, min(A_ij, A_ji)), where A = Sum - Extent.
+    # This also preserves the diagonal (S_ii - E_ii).
+    mat_x = np.maximum(0, np.minimum(alternation_raw, alternation_raw.T))
+
+    # Alternation Shift (S) is the positive part of the remainder after exchange.
+    mat_s = np.maximum(0, alternation_raw - mat_x)
+
+    # Indirect (Unaccounted) Component (U) is calculated from the identity:
+    # U = E + X + S - V (where V is Sum)
+    mat_u = mat_ext + mat_x + mat_s - mat_sum
+
+    # 4. Consolidate and Export all components to CSV
+    components = {
+        "sum": mat_sum,
+        "extent": mat_ext,
+        "allocation_exchange": mat_c,
+        "quantity_allocation_shift": mat_q,
+        "alternation_exchange": mat_x,
+        "alternation_shift": mat_s,
+        "unaccounted_extent": mat_u,  # Use key 'unaccounted_extent' for consistency with heatmap generator
+    }
+
+    for name, data in components.items():
+        df_out = pd.DataFrame(
+            data,
+            index=all_labels,
+            columns=all_labels
+        )
+
+        fname = f"transition_matrix_{name}_{period_label}.csv"
+        path = os.path.join(output_dir, fname)
+        df_out.to_csv(path)
+
+        print(f"Component saved: {fname}")
+
+###############################################################################
+#                                                                             #
+#                  9. Reorder Matrices by net change                          #
+#                                                                             #
+###############################################################################
+def reorder_matrices_by_net_change(
+    df_sum: pd.DataFrame,
+    df_ext: pd.DataFrame,
+    df_ext_exc: pd.DataFrame,
+    df_ext_shift: pd.DataFrame,
+    df_alt_exc: pd.DataFrame,
+    df_alt_shift: pd.DataFrame,
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+]:
+    """
+    Reorder matrices from largest losers to largest gainers using net change.
+
+    Parameters
+    ----------
+    df_sum : pd.DataFrame
+        The aggregated SUM matrix used to calculate the sorting order.
+    df_ext, df_ext_exc, df_ext_shift, df_alt_exc, df_alt_shift : pd.DataFrame
+        The other component matrices to be reordered.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, ...]
+        All input dataframes reindexed with the same optimized order.
+    """
+    # 1. Calculate Net Change (Gains - Losses)
+    # Diagonal is ignored to focus only on transitions
+    m_values = df_sum.values.copy()
+    np.fill_diagonal(m_values, 0.0)
+    
+    gains = m_values.sum(axis=0)
+    losses = m_values.sum(axis=1)
+    net_change = gains - losses
+    
+    # 2. Define the sorting order (ascending: losers first)
+    net_series = pd.Series(net_change, index=df_sum.index)
+    order_labels = net_series.sort_values(ascending=True).index.tolist()
+
+    # 3. Helper to apply the same order to any dataframe
+    def _apply_order(df: pd.DataFrame) -> pd.DataFrame:
+        return df.reindex(index=order_labels, columns=order_labels).fillna(0.0)
+
+    # 4. Return all matrices reordered
+    return (
+        _apply_order(df_sum),
+        _apply_order(df_ext),
+        _apply_order(df_ext_exc),
+        _apply_order(df_ext_shift),
+        _apply_order(df_alt_exc),
+        _apply_order(df_alt_shift),
+    )
+
+
+def export_global_overall_change_frequency_csv_gee(
     year_list: list,
     drive_folder: str,
     scale: int = 300,
-    nodata_val: int = NODATA_VALUE,
     full_year_list: list = None,
 ) -> ee.batch.Task:
     """
-    Compute and export a raster representing the Alternation Shift Component using GEE.
-    Calculated as: Total Changes - Quantity (Extension) - Total Exchange.
+    Compute and export a single CSV representing the overall frequency of changes
+    (how many pixels changed 0, 1, 2, ... N times) across the entire timeline.
     """
     if GLOBAL_GEOM is None:
         raise ValueError(
@@ -5089,46 +6199,172 @@ def export_alternation_shift_task_gee(
             "utils.initialize_active_region(region_code) before running tasks."
         )
 
-    print(f"Preparing Alternation Shift GEE Task for {year_list[0]}-{year_list[-1]}...")
+    print(f"Preparing Overall Change Frequency GEE Task for {year_list[0]}-{year_list[-1]}...")
 
     if full_year_list is None:
         full_year_list = year_list
 
-    # 1. Combine lists to build a single stack containing all required years safely
-    combined_years = sorted(list(set(year_list) | set(full_year_list)))
-
-    # 2. Build the master stack and extract the global mask based on the FULL timeline
-    master_stack, master_band_names = build_glance_stack(
-        year_list=combined_years,
+    # 1. Build global mask using the FULL timeline to ensure mathematical consistency
+    full_stack, _ = build_glance_stack(
+        year_list=full_year_list,
         collection_id=GLANCE_COLLECTION_ID,
         band_name=GLANCE_CLASS_BAND,
-        nodata_val=nodata_val,
+        nodata_val=NODATA_VALUE,
     )
-    
-    # Create the global validity mask strictly using full_year_list bands
-    full_year_bands = [f"y{y}" for y in full_year_list]
-    full_stack_subset = master_stack.select(full_year_bands)
-    global_mask = full_stack_subset.neq(nodata_val).unmask(0).reduce(ee.Reducer.min())
+    global_mask = full_stack.neq(NODATA_VALUE).unmask(0).reduce(ee.Reducer.min())
 
-    # 3. Extract aligned yearly images directly from the master stack by name and apply mask
-    imgs = [
-        master_stack.select(f"y{y}").rename(GLANCE_CLASS_BAND).updateMask(global_mask)
-        for y in year_list
-    ]
+    # 2. Build target stack for the specific years we want to export tasks for
+    target_stack, target_band_names = build_glance_stack(
+        year_list=year_list,
+        collection_id=GLANCE_COLLECTION_ID,
+        band_name=GLANCE_CLASS_BAND,
+        nodata_val=NODATA_VALUE,
+    )
 
-    # 4. Calculate Total Changes across all intervals
-    total_changes = ee.Image(0).toUint8()
-    for t in range(len(imgs) - 1):
-        change = imgs[t].neq(imgs[t+1])
-        total_changes = total_changes.add(change)
+    # 3. Shift the target stack by 1 band to compare t and t+1 in parallel (vectorized)
+    stack_t = target_stack.select(target_band_names[:-1])
+    stack_t1 = target_stack.select(target_band_names[1:])
 
-    # 5. Calculate Quantity Component (start != end)
-    quantity = imgs[0].neq(imgs[-1]).toUint8()
+    # 4. Calculate total changes across the entire timeline
+    total_changes = stack_t.neq(stack_t1).reduce(ee.Reducer.sum()).rename('num_changes')
 
-    # 4. Calculate Total Exchange
-    classes = list(GLANCE_METADATA.keys())
-    total_exchange = ee.Image(0).toUint8()
+    total_changes_masked = total_changes.updateMask(global_mask)
 
+    # 5. Compute the frequency histogram of the total changes for these pixels
+    histogram = total_changes_masked.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram().unweighted(),
+        geometry=GLOBAL_GEOM,
+        scale=scale,
+        crs="EPSG:4326",
+        maxPixels=1e13,
+        tileScale=16,
+    ).get('num_changes')
+
+    # Handle possible nulls if no change occurred
+    hist_dict = ee.Dictionary(ee.Algorithms.If(histogram, histogram, {}))
+    feature = ee.Feature(None, hist_dict)
+    fc = ee.FeatureCollection([feature])
+
+    # 6. Configure and start the export task
+    start_year = year_list[0]
+    end_year = year_list[-1]
+    export_name = f"Number_Change_Overall_{start_year}_{end_year}"
+    task = ee.batch.Export.table.toDrive(
+        collection=fc,
+        description=export_name,
+        folder=drive_folder,
+        fileNamePrefix=export_name,
+        fileFormat="CSV",
+    )
+    task.start()
+    print(f"Task '{export_name}' submitted to Google Earth Engine.")
+    return task
+
+
+###############################################################################
+#                                                                             #
+#                  10. GLOBAL MOSAIC CLASS & FUNCTIONS                        #
+#                                                                             #
+###############################################################################
+
+class GlanceMosaicker:
+    """
+    Manages continental GLanCE regions to build a consistent global mosaic
+    and unified geometry operations directly inside Google Earth Engine.
+    """
+
+    def __init__(self, region_codes: List[str]) -> None:
+        """
+        Initialize the mosaicker with a customizable set of continental regions.
+        
+        Parameters
+        ----------
+        region_codes : list of str
+            List of regional codes to compose the mosaic (e.g., ['EU', 'AF', 'SA']).
+        """
+        if not region_codes:
+            raise ValueError("You must provide at least one region code to construct the mosaic.")
+            
+        self.region_codes = region_codes
+        self._validate_regions()
+        self.unified_geometry = self._build_unified_geometry()
+
+    def _validate_regions(self) -> None:
+        """Validate if all provided region codes exist in the registry."""
+        for code in self.region_codes:
+            if code not in GLANCE_REGIONS_REGISTRY:
+                raise ValueError(
+                    f"Region code '{code}' is invalid. "
+                    f"Choose from: {list(GLANCE_REGIONS_REGISTRY.keys())}"
+                )
+
+    def _build_unified_geometry(self) -> ee.Geometry:
+        """
+        Combine the individual rectangular bounding boxes into a single 
+        ee.Geometry.MultiPolygon nativelly in GEE.
+        """
+        geometries = []
+        for code in self.region_codes:
+            geom_coords = GLANCE_REGIONS_REGISTRY[code]['geom']
+            # Create individual non-planar rectangular polygons
+            rect = ee.Geometry.Rectangle(geom_coords, "EPSG:4326", False)
+            geometries.append(rect)
+        
+        # Perform a spatial union to create a single clean multipolygon geometry
+        return ee.Geometry.MultiPolygon(geometries)
+
+    def get_global_crs_and_transform(self, scale: int = 300) -> Tuple[str, List[float]]:
+        """
+        Get the global Cylindrical Equal Area projection parameters (EPSG:6933).
+        This CRS preserves area properties globally, making pixel counts and area calculations
+        extremely accurate across different latitudes.
+        
+        Parameters
+        ----------
+        scale : int
+            The spatial resolution in meters (e.g., 300 or 30).
+            
+        Returns
+        -------
+        tuple
+            A tuple containing the CRS string ("EPSG:6933") and the affine transform list.
+        """
+        crs = "EPSG:6933"
+        # Setup a standard global transform aligned to the coordinate origin
+        transform = [scale, 0, 0, 0, -scale, 0]
+        return crs, transform
+
+    def get_mosaicked_image_collection(self, year: int) -> ee.Image:
+        """
+        Retrieve and mosaic the GLanCE land cover images for the specified year
+        restricted to the unified continental boundary.
+        
+        Parameters
+        ----------
+        year : int
+            The target year to mosaic (e.g., 2019).
+            
+        Returns
+        -------
+        ee.Image
+            The unified, masked land cover image for the selected year.
+        """
+        start_date = f"{year}-01-01"
+        end_date = f"{year}-12-31"
+
+        # Filter GLanCE collection by date and band
+        collection = (
+            ee.ImageCollection(GLANCE_COLLECTION_ID)
+            .filterDate(start_date, end_date)
+            .select(GLANCE_CLASS_BAND)
+        )
+
+        # Mosaic overlapping zones (resolving potential duplicates via first-order placement)
+        # and clip strictly to our continental limits
+        mosaicked_image = collection.mosaic().clip(self.unified_geometry)
+        
+        # Enforce uint8 casting to preserve data type limits
+        return mosaicked_image.toByte()
     for i in range(len(classes)):
         for j in range(i + 1, len(classes)):
             class_a = classes[i]
