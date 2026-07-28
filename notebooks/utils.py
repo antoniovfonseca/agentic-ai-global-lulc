@@ -3285,6 +3285,7 @@ def annotate_heatmap(
     show_diagonal: bool = True,
     equalize_diagonal_font: bool = False,
     vmax: Optional[float] = None,
+    diagonal_vmax: Optional[float] = None, # New parameter for diagonal-specific vmax
 ) -> None:
     """
     Annotate a heatmap with integer cell values and adaptive text color.
@@ -3303,7 +3304,10 @@ def annotate_heatmap(
     equalize_diagonal_font : bool, optional
         If True, uses the same font size for all cells.
     vmax : float, optional
-        The maximum scale value used to determine text color thresh.
+        The maximum scale value for off-diagonal values, used to determine text color threshold.
+    diagonal_vmax : float, optional
+        The maximum value among the diagonal entries, used to determine
+        text color on grayscale diagonals.
     """
     if M.size == 0:
         return
@@ -3324,7 +3328,13 @@ def annotate_heatmap(
             if i == j:
                 if not show_diagonal:
                     continue
-                color = "white"
+                # Determine text color based on diagonal's grayscale background
+                if diagonal_vmax is not None and diagonal_vmax > 0:
+                    # If background is >50% gray, use white text, else black.
+                    normalized_val = val / diagonal_vmax
+                    color = "white" if normalized_val > 0.5 else "black"
+                else:
+                    color = "white" # Default for black diagonal
                 current_fontsize = max(5, fontsize - 4)  # Make diagonal font smaller
             else:
                 if val >= thresh_red and val > 0:
@@ -3416,6 +3426,7 @@ def plot_heatmap(
     xlabel: str = "To class",
     ylabel: str = "From class",
     show_diagonal_values: bool = True,
+    # This parameter is now controlled internally based on matrix_key
     equalize_diagonal_font: bool = False,
 ) -> None:
     """
@@ -3622,29 +3633,48 @@ def plot_heatmap(
             norm=norm_pos,
         )
 
-    # 9. Overlay black diagonal
+    # 9. Overlay diagonal (now conditional for grayscale or black)
     diag_mask = np.eye(
         nrows,
         dtype=bool,
     )
-    matrix_diag = np.ma.masked_where(
-        ~diag_mask,
-        np.ones_like(
-            matrix_values,
-        ),
-    )
+    
+    # Define which matrices should have grayscale diagonals
+    DIAGONAL_GRAYSCALE_MATRICES = ["sum", "ext", "all_exc", "alt_exc"]
+    
+    annotate_heatmap_diagonal_vmax = None # Initialize for annotate_heatmap
 
-    ax.imshow(
-        matrix_diag,
-        aspect="equal",
-        cmap=mcolors.ListedColormap(
-            [
-                "black",
-            ],
-        ),
-        vmin=0,
-        vmax=1,
-    )
+    if matrix_key in DIAGONAL_GRAYSCALE_MATRICES:
+        diagonal_values = np.diag(matrix_values)
+        # Determine vmax for diagonal, ensuring it's at least 1 if all zeros
+        vmax_diag_current = np.max(diagonal_values) if diagonal_values.size > 0 and np.max(diagonal_values) > 0 else 1.0
+        
+        cmap_diag = plt.cm.Greys # Greys colormap (0=white, 1=black)
+        norm_diag = mcolors.Normalize(vmin=0, vmax=vmax_diag_current)
+        
+        # Plot diagonal values with grayscale colormap
+        ax.imshow(
+            np.ma.masked_where(~diag_mask, matrix_values), # Mask non-diagonal elements
+            aspect="equal",
+            cmap=cmap_diag,
+            norm=norm_diag,
+            interpolation="nearest"
+        )
+        annotate_heatmap_diagonal_vmax = vmax_diag_current
+    else:
+        # Original black diagonal overlay for other matrices (e.g., Shift, Indirect)
+        matrix_diag = np.ma.masked_where(
+            ~diag_mask,
+            np.ones_like(matrix_values),
+        )
+        ax.imshow(
+            matrix_diag,
+            aspect="equal",
+            cmap=mcolors.ListedColormap(["black"]),
+            vmin=0,
+            vmax=1,
+            interpolation="nearest"
+        )
 
     # 10. Axis formatting
     ax.set_xticks(
@@ -3823,6 +3853,7 @@ def plot_heatmap(
                 show_diagonal=show_diagonal_values,
                 equalize_diagonal_font=equalize_diagonal_font,
                 vmax=vmax_eff,
+                diagonal_vmax=annotate_heatmap_diagonal_vmax, # Pass the new parameter
             )
         except NameError:
             pass
@@ -3836,6 +3867,39 @@ def plot_heatmap(
         )
 
     plt.show()
+
+def generate_all_heatmaps(
+    matrices_dict: dict,
+    output_path: str,
+    interval_str: str,
+    years: list,
+    style_config: dict,
+) -> None:
+    """
+    Iterate over the matrices dictionary and generate a heatmap for each.
+
+    Parameters
+    ----------
+    matrices_dict : dict
+        Dictionary containing the dataframes to plot.
+    output_path : str
+        Base directory path to save the generated charts.
+    interval_str : str
+        String representing the time interval.
+    years : list
+        List of years processed.
+    style_config : dict
+        Dictionary containing style configurations for the plot.
+
+    Returns
+    -------
+    None
+    """
+    import os
+
+    print(
+        "Generating Heatmaps...",
+    )
 
 # ---------------------------------------------------------------------------
 # 6.5 QUEST CHARTS
@@ -4222,6 +4286,7 @@ def plot_change_components_by_class(
     # 2. Filter and Prepare Data
     target_intervals = ["extent", "alternation_shift", "alternation_exchange"]
     df_sub = df[df["Time_Interval"].isin(target_intervals)].copy()
+    # Rename for clarity in the plot
     df_sub["Component"] = df_sub["Component"].str.replace("Allocation_Quantity", "Quantity")
 
     # 3. Colors and Order
@@ -4232,6 +4297,7 @@ def plot_change_components_by_class(
         "Allocation_Shift": "#2ca02c",
         "Alternation_Shift": "#990099",
     }
+    # Components derived from 'extent'
     comp_groups = [
         "Quantity",
         "Allocation_Shift",
@@ -4244,6 +4310,7 @@ def plot_change_components_by_class(
 
     for cls in classes:
         c_data = df_sub[df_sub["Class"] == cls]
+        # Net change is based on Quantity component only
         qty_gain = c_data[c_data["Component"] == "Quantity"]["Gain"].sum()
         qty_loss = c_data[c_data["Component"] == "Quantity"]["Loss"].sum()
         class_stats.append((cls, qty_gain - qty_loss))
@@ -4262,6 +4329,7 @@ def plot_change_components_by_class(
         for comp in comp_groups:
             gains[comp] = c_data[c_data["Component"] == comp]["Gain"].sum()
 
+        # Handle Alternation components separately
         raw_alt_exc = c_data[c_data["Component"] == "Alternation_Exchange"]["Gain"].sum()
         raw_alt_shift = c_data[c_data["Component"] == "Alternation_Shift"]["Gain"].sum()
         net_alt = raw_alt_exc + raw_alt_shift
@@ -4283,6 +4351,7 @@ def plot_change_components_by_class(
         for comp in comp_groups:
             losses[comp] = c_data[c_data["Component"] == comp]["Loss"].sum()
 
+        # Handle Alternation components separately for losses
         raw_alt_exc_l = c_data[c_data["Component"] == "Alternation_Exchange"]["Loss"].sum()
         raw_alt_shift_l = c_data[c_data["Component"] == "Alternation_Shift"]["Loss"].sum()
         net_alt_l = raw_alt_exc_l + raw_alt_shift_l
@@ -4304,6 +4373,7 @@ def plot_change_components_by_class(
         plot_data.append({"class": cls, "gains": gains, "losses": losses})
 
     # 6. Determine Scale Factor
+    # Based on the maximum total gain or loss for any single class
     if max_val >= 1_000_000_000_000:
         scale_factor, y_label = 1_000_000_000_000, "Loss and Gain (trillion pixels)"
     elif max_val >= 1_000_000_000:
@@ -4324,6 +4394,7 @@ def plot_change_components_by_class(
         right=0.75
     )
 
+    # X-axis positions
     x_pos = np.arange(len(ordered_classes))
     width = 0.6
 
@@ -4353,6 +4424,7 @@ def plot_change_components_by_class(
                 bottom_l -= val
 
     # 8. Formatting
+    # Map class IDs to names for tick labels
     class_names = [
         class_labels_dict.get(int(c) if str(c).isdigit() else c, {}).get("name", str(c))
         for c in ordered_classes
@@ -4389,6 +4461,7 @@ def plot_change_components_by_class(
         labelsize=24
     )
 
+    # Set Y-axis limits and format ticks
     limit = max_val / scale_factor * 1.1 if max_val > 0 else 1.0
     ax.set_ylim(-limit, limit)
     ax.yaxis.set_major_locator(
@@ -4401,6 +4474,7 @@ def plot_change_components_by_class(
         ticker.FormatStrFormatter("%d")
     )
 
+    # Create legend handles
     handles = [
         plt.Rectangle((0, 0), 1, 1, color=components_map[c], label=c.replace("_", " "))
         for c in reversed(stack_order)
@@ -4417,6 +4491,7 @@ def plot_change_components_by_class(
         frameon=False,
     )
 
+    # Adjust layout to prevent legend from being cut off
     plt.tight_layout()
 
     charts_dir = os.path.join(
@@ -4441,6 +4516,7 @@ def plot_change_components_by_class(
     plt.show()
     print(f"Chart saved to: {out_fig_path}")
 
+
 # ---------------------------------------------------------------------------
 # 6.6 PLOT MAPS
 # ---------------------------------------------------------------------------
@@ -4448,6 +4524,7 @@ def plot_change_components_by_class(
 def export_quantity_component_task_gee(
     year_list: list,
     drive_folder: str,
+    # Default scale to 300m for global analysis
     scale: int = 300,
     nodata_val: int = 255,
     full_year_list: list = None,
@@ -4461,6 +4538,7 @@ def export_quantity_component_task_gee(
             "utils.initialize_active_region(region_code) before running tasks."
         )
 
+    # Default to using the main year list for the mask if not specified
     if full_year_list is None:
         full_year_list = year_list
 
@@ -4484,7 +4562,7 @@ def export_quantity_component_task_gee(
     start_img = master_stack.select(f"y{year_list[0]}").rename(GLANCE_CLASS_BAND)
     end_img = master_stack.select(f"y{year_list[-1]}").rename(GLANCE_CLASS_BAND)
 
-    # 2. Compute Quantity Component: 1 if start != end, else 0
+    # 2. Compute Quantity Component: 1 if start class is not equal to end class, else 0
     quantity_image = start_img.neq(end_img).multiply(1).toByte()
 
     # 3. Apply the global validity mask (must be valid across ALL years to preserve math integrity)
@@ -4517,6 +4595,7 @@ def export_quantity_component_task_gee(
 def plot_quantity_component_map(
     output_dir: str,
     nodata_val: int,
+    # Default filename prefix for quantity component raster
     raster_filename: str,
     scale_factor: float = 0.05,
 ) -> None:
@@ -4558,7 +4637,6 @@ def plot_quantity_component_map(
     os.system(f"gdalbuildvrt {vrt_path} {files_str}")
 
     # 3. Calculate pixel size for scale bar
-    # Assumes compute_display_pixel_size_km is defined in the same module
     pixel_size_km = compute_display_pixel_size_km(
         raster_path=vrt_path,
         downsample_factor=scale_factor,
@@ -4596,7 +4674,7 @@ def plot_quantity_component_map(
         dpi=300
     )
 
-    # 6. Colormap for 0 and 1
+    # 6. Define a discrete colormap for 0 (no change) and 1 (change)
     cmap = ListedColormap(
         ["#c0c0c0", 
          "#fde725"]
@@ -4612,7 +4690,7 @@ def plot_quantity_component_map(
         norm=norm,
     )
 
-    # 8. Legend (adapted for 0 and 1 only)
+    # 8. Create a manual legend for the two discrete values
     legend_elements = [
         Patch(
             facecolor="#c0c0c0",
@@ -4665,7 +4743,6 @@ def plot_quantity_component_map(
     ax.add_artist(scalebar)
 
     try:
-        # Assumes north_arrow is defined in the same module
         north_arrow(
             ax,
             location="upper right",
@@ -4780,6 +4857,7 @@ def export_alternation_components_gee(
             "utils.initialize_active_region(region_code) before running tasks."
         )
 
+    # Use the same year list for the mask if a full one isn't provided
     if full_year_list is None:
         full_year_list = year_list
 
@@ -4791,8 +4869,7 @@ def export_alternation_components_gee(
         nodata_val=nodata_val,
     )
     
-    # Extract images and global mask from the helper function's output
-    # The global mask is already applied to these images.
+    # Extract images (already masked) and the global mask itself
     yearly_images = {year: img for year, img in yearly_images_masked}
     global_mask = yearly_images_masked[0][1].mask() # Get mask from first image
 
@@ -4815,7 +4892,7 @@ def export_alternation_components_gee(
             E_ij = img_start.eq(i).And(img_end.eq(j))
             E_ji = img_start.eq(j).And(img_end.eq(i))
 
-            # --- V_ij and V_ji (Sum of Intervals) - Vectorized ---
+            # --- V_ij and V_ji (Sum of Intervals) - Vectorized calculation ---
             V_ij = img_stack_t.eq(i).And(img_stack_t1.eq(j)).reduce(ee.Reducer.sum())
             V_ji = img_stack_t.eq(j).And(img_stack_t1.eq(i)).reduce(ee.Reducer.sum())
 
@@ -4840,7 +4917,7 @@ def export_alternation_components_gee(
             S_bands.append(S_ij.rename(b_name).updateMask(global_mask))
             U_bands.append(U_ij.rename(b_name).updateMask(global_mask))
 
-    # Assemble the final multi-band images
+    # Assemble the final multi-band images for each component
     img_X = ee.Image(X_bands)
     img_S = ee.Image(S_bands)
     img_U = ee.Image(U_bands)
@@ -4853,6 +4930,7 @@ def export_alternation_components_gee(
 
     print("Step 3/4: Reducing global area and configuring export tasks...")
     tasks = []
+    # Create a separate export task for each component
     for name, image in component_images.items():
         totals = image.reduceRegion(
             reducer=ee.Reducer.sum(),
@@ -4877,6 +4955,7 @@ def export_alternation_components_gee(
 
     print("Step 4/4: Starting tasks sequentially to avoid quota errors...")
     for task in tasks:
+        # Start one task and wait for it to complete before starting the next
         task.start()
         print(f"🚀 Task started: {task.description}. Monitoring...")
         while task.active():
@@ -4890,7 +4969,7 @@ def export_alternation_components_gee(
         final_status = task.status()
         if final_status['state'] != 'COMPLETED':
             error_msg = final_status.get('error_message', 'No error message found.')
-            print(f"🚨 Task {task.description} failed: {error_msg}")
+            print(f"🚨 Task {task.description} failed: {error_msg}") # noqa
             # Stop processing further tasks if one fails
             raise Exception(f"Task {task.description} failed.")
         else:
@@ -4898,15 +4977,18 @@ def export_alternation_components_gee(
 
     return tasks
 
+
 def plot_alternation_exchange_map(*args, **kwargs):
     """This function is deprecated and its logic is now part of the new GEE implementation."""
     print("This function is deprecated.")
     pass
 
+
 def plot_alternation_shift_map(*args, **kwargs):
     """This function is deprecated and its logic is now part of the new GEE implementation."""
     print("This function is deprecated.")
     pass
+
 
 def export_alternation_shift_task_gee(*args, **kwargs):
     """This function is deprecated. Use export_alternation_components_gee instead."""
@@ -4918,11 +5000,13 @@ def export_alternation_exchange_task_gee(*args, **kwargs):
     print("This function is deprecated. Use export_alternation_components_gee instead.")
     return None
 
+
 def plot_alternation_shift_map(
     output_dir: str,
     nodata_val: int,
     raster_filename: str,
     scale_factor: float = 0.05,
+    # This function is now a duplicate of the one at line 3010 and should be removed.
 ) -> None:
     """
     Plot the Alternation Shift raster map with cartographic elements.
@@ -4936,7 +5020,7 @@ def plot_alternation_shift_map(
     raster_filename : str
         Prefix of the raster tiles to plot.
     scale_factor : float, optional
-        Scale factor to downsample the massive global raster to fit into memory.
+        Scale factor to downsample the global raster to fit into memory.
 
     Returns
     -------
@@ -5059,6 +5143,7 @@ def plot_alternation_shift_map(
 
     # 9. Cartographic elements
     degree_in_meters = 111320.0
+    # Use pixel size if CRS is projected, otherwise use degree equivalent
     dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
 
     def km_formatter(value, unit):
@@ -5095,6 +5180,7 @@ def plot_alternation_shift_map(
     )
     ax.set_aspect("equal")
 
+    # Define transformers for lat/lon tick labels
     to_latlon = Transformer.from_crs(
         src_crs,
         "EPSG:4326",
@@ -5425,6 +5511,7 @@ def export_interval_transition_matrices_gee(
 
     return tasks
 
+
 def format_raw_gee_csv_to_matrix(
     raw_csv_path: str,
     final_csv_path: str,
@@ -5448,6 +5535,7 @@ def format_raw_gee_csv_to_matrix(
         print(f"⚠️ Raw GEE file not found, skipping format: {raw_csv_path}")
         return
 
+    # Default to GLANCE classes if not provided
     if classes is None:
         classes = list(GLANCE_METADATA.keys())
 
@@ -5468,6 +5556,7 @@ def format_raw_gee_csv_to_matrix(
 
     matrix.to_csv(final_csv_path)
     print(f"✅ Formatted 7x7 matrix saved to: {final_csv_path}")
+
 
 def parse_gee_raw_csv(file_path: str) -> pd.DataFrame:
     """
@@ -6384,7 +6473,7 @@ def plot_alternation_shift_map(
     raster_filename : str
         Prefix of the raster tiles to plot.
     scale_factor : float, optional
-        Scale factor to downsample the massive global raster to fit into memory.
+        Scale factor to downsample the global raster to fit into memory.
 
     Returns
     -------
@@ -6400,7 +6489,7 @@ def plot_alternation_shift_map(
             f"Raster tiles not found for prefix: {raster_filename}. Make sure the GEE export finished."
         )
 
-    # 2. Create a temporary Virtual Raster (VRT) to merge tiles dynamically
+    # 2. Create a temporary Virtual Raster (VRT) to merge tiles
     vrt_path = os.path.join(
         output_dir,
         "merged_shift.vrt"
@@ -6408,7 +6497,7 @@ def plot_alternation_shift_map(
     files_str = " ".join([f'"{f}"' for f in raster_files])
     os.system(f"gdalbuildvrt {vrt_path} {files_str}")
 
-    # 3. Calculate pixel size for scale bar
+    # 3. Calculate pixel size for the scale bar
     pixel_size_km = compute_display_pixel_size_km(
         raster_path=vrt_path,
         downsample_factor=scale_factor,
@@ -6426,7 +6515,7 @@ def plot_alternation_shift_map(
             resampling=rasterio.enums.Resampling.nearest,
         )
 
-        # Force masking using the provided nodata value
+        # Mask using the provided nodata value
         data_masked = np.ma.masked_equal(data, nodata_val)
 
         src_crs = src.crs
@@ -6452,7 +6541,7 @@ def plot_alternation_shift_map(
     if data_max <= 0:
         data_max = 1
 
-    # 6. Discrete Colormap Configuration
+    # 6. Discrete colormap configuration
     original_cmap = plt.get_cmap("viridis_r")
     # Define the color for value 0 (Background/Gray)
     colors_list = ["#c0c0c0"] + [
@@ -6470,14 +6559,14 @@ def plot_alternation_shift_map(
         norm=norm,
     )
 
-    # 8. Legend Configuration
+    # 8. Legend configuration
     legend_elements = []
 
-    # Extract unique values actually present in the masked raster data
+    # Extract unique values present in the masked raster data
     present_values = np.unique(data_masked.compressed())
 
     for i in range(0, data_max + 1):
-        # Append to legend ONLY if the value is present in the map
+        # Append to legend only if the value is present in the map
         if i in present_values:
             legend_elements.append(
                 Patch(
@@ -6507,6 +6596,7 @@ def plot_alternation_shift_map(
 
     # 9. Cartographic elements
     degree_in_meters = 111320.0
+    # Use pixel size if CRS is projected, otherwise use degree equivalent
     dx_meters = degree_in_meters if ax.get_xlim()[1] <= 180.5 else (pixel_size_km * 1000)
 
     def km_formatter(value, unit):
@@ -6535,7 +6625,7 @@ def plot_alternation_shift_map(
     except NameError:
         print("north_arrow function not found. Skipping north arrow.")
 
-    # 10. Axes styling
+    # 10. Axes styling and title
     ax.set_title(
         "Alternation Shift",
         fontsize=18,
@@ -6543,6 +6633,7 @@ def plot_alternation_shift_map(
     )
     ax.set_aspect("equal")
 
+    # Define transformers for lat/lon tick labels
     to_latlon = Transformer.from_crs(
         src_crs,
         "EPSG:4326",
@@ -6579,7 +6670,7 @@ def plot_alternation_shift_map(
         va="center"
     )
 
-    # 11. Save and Show
+    # 11. Save and show the figure
     maps_dir = os.path.join(
         output_dir,
         "maps"
@@ -6629,7 +6720,7 @@ def load_and_reorder_matrices(output_path: str, year_list: list) -> Dict[str, An
     interval_str = f"{year_list[0]}-{year_list[-1]}"
 
     for key, meta in MATRIX_META.items():
-        # Look directly in the output_path instead of the 'tables' subfolder
+        # Look directly in the output_path
         csv_path = os.path.join(output_path, f"transition_matrix_{meta[0]}_{interval_str}.csv")
         
         if os.path.exists(csv_path):
@@ -6637,6 +6728,7 @@ def load_and_reorder_matrices(output_path: str, year_list: list) -> Dict[str, An
         else:
             print(f"Warning: Matrix file not found at {csv_path}")
 
+    # Reorder all loaded matrices based on the net change from the 'sum' matrix
     if matrices:
         matrices = reorder_all_matrices(matrices_dict=matrices)
 
@@ -6652,6 +6744,7 @@ MATRIX_META = {
     "qty_shift": ["quantity_allocation_shift", "Quantity & Allocation Shift", "stock"],
     "unacc_ext": ["unaccounted_extent", "Indirect", "stock"],
 }
+
 
 def calculate_trajectory_gee(
     image_stack: ee.Image,
@@ -6676,8 +6769,7 @@ def calculate_trajectory_gee(
     ee.Image
         An ee.Image containing the classified trajectory codes (1 to 5).
     """
-    # 0. Apply the global validity mask to the image stack at the very beginning
-    # This ensures all subsequent operations work on a consistent set of valid pixels.
+    # 0. Apply the global validity mask to the image stack at the very beginning.
     masked_image_stack = image_stack.updateMask(global_mask)
 
     # 1. Extract the start and end images from the stack
@@ -6723,10 +6815,10 @@ def calculate_trajectory_gee(
     # 12. Combine all trajectory maps into a single output image
     trajectory_image = traj_1.add(traj_2).add(traj_3).add(traj_4).add(traj_5)
 
-    # 13. Apply the global validity mask
-    # The global_mask is already applied to the stack, so this final mask is redundant.
+    # 13. The global_mask is already applied to the stack, so a final mask is redundant.
 
     return trajectory_image.rename('trajectory')
+
 
 def build_glance_stack(
     year_list: list,
@@ -6814,6 +6906,7 @@ def export_interval_transition_matrices_gee(
     """
     tasks = []
 
+    # Default to using the main year list for the mask if not specified
     if full_year_list is None:
         full_year_list = year_list
 
@@ -6846,6 +6939,7 @@ def export_interval_transition_matrices_gee(
         img_start = yearly_by_year[start_year].updateMask(global_mask)
         img_end = yearly_by_year[end_year].updateMask(global_mask)
 
+        # Encode transitions: (Start * 100) + End
         transition_img = img_start.multiply(100).add(img_end).rename("transition")
 
         histogram = transition_img.reduceRegion(
@@ -6917,6 +7011,7 @@ def parse_gee_raw_csv(file_path: str) -> pd.DataFrame:
 
     return df_mat
 
+
 class ComponentCalculator:
     """
     Compute change components for a matrix.
@@ -6984,6 +7079,7 @@ class ComponentCalculator:
                 "Shift_Loss": shift,
             })
         return self
+
 
 
 def process_matrix(
@@ -7082,6 +7178,7 @@ def process_matrix(
             })
     return results
 
+
 def generate_all_heatmaps(
     matrices_dict: dict,
     output_path: str,
@@ -7115,7 +7212,7 @@ def generate_all_heatmaps(
         "Generating Heatmaps...",
     )
 
-    # Enforce unified color scale and maximum value of 50 million pixels globally
+    # Enforce a unified color scale and a maximum value for consistency
     style_config = style_config.copy()
     style_config["vmax"] = 50_000_000.0
     style_config["cmap"] = "YlOrRd"
@@ -7131,7 +7228,7 @@ def generate_all_heatmaps(
     )
 
     title_map = {
-        "ext": "Extent", # This was the old title_map
+        "ext": "Extent",
         "sum": "Time Intervals",
         "all_exc": "Allocation Exchange",
         "alloc_shift": "Allocation Shift",
@@ -7139,7 +7236,7 @@ def generate_all_heatmaps(
         "alt_exc": "Alternation Exchange",
         "alt_shift": "Alternation Shift",
         "unacc_ext": "Indirect",
-    } # I'm keeping this logic but it will now be consistent
+    }
 
     for key, df in matrices_dict.items():
         if df is None or df.empty:
@@ -7165,7 +7262,8 @@ def generate_all_heatmaps(
             df=df,
             title=full_title,
             save_path=out_file,
-            **style_config
+            **style_config,
+            matrix_key=key
         )
 
         print(
@@ -7355,6 +7453,7 @@ def save_area_matrices_to_csv(
         
     return saved_files
 
+
 ###############################################################################
 #                                                                             #
 #                  7. Compute Sum matrix                                      #
@@ -7420,6 +7519,7 @@ def compute_sum_matrix(
         print(f"SUM matrix successfully saved to: {output_path}")
 
     return df_sum
+
 
 ###############################################################################
 #                                                                             #
@@ -7524,6 +7624,7 @@ def compute_and_save_components(
 
         print(f"Component saved: {fname}")
 
+
 ###############################################################################
 #                                                                             #
 #                  9. Reorder Matrices by net change                          #
@@ -7585,6 +7686,7 @@ def reorder_matrices_by_net_change(
         _apply_order(df_alt_exc),
         _apply_order(df_alt_shift),
     )
+
 
 
 def export_global_overall_change_frequency_csv_gee(
