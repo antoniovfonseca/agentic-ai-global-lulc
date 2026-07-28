@@ -3643,7 +3643,7 @@ def plot_heatmap(
     )
     
     # Define which matrices should have grayscale diagonals
-    DIAGONAL_GRAYSCALE_MATRICES = ["sum", "ext", "all_exc", "alt_exc"]
+    DIAGONAL_GRAYSCALE_MATRICES = ["sum", "ext", "all_exc", "alt_exc", "unacc_ext"]
     
     annotate_heatmap_diagonal_vmax = None # Initialize for annotate_heatmap
 
