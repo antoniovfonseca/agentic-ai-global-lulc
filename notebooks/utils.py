@@ -3428,6 +3428,7 @@ def plot_heatmap(
     show_diagonal_values: bool = True,
     # This parameter is now controlled internally based on matrix_key
     equalize_diagonal_font: bool = False,
+    matrix_key: Optional[str] = None,
 ) -> None:
     """
     Plot a square matrix as a heatmap with adaptive integer colorbar.
@@ -3484,6 +3485,8 @@ def plot_heatmap(
         If True, shows text on the black diagonal.
     equalize_diagonal_font : bool, optional
         If True, equalizes the font size of the diagonal.
+    matrix_key : str, optional
+        The key identifying the matrix type (e.g., "sum", "ext") to control diagonal coloring.
 
     Returns
     -------
@@ -5850,7 +5853,8 @@ def generate_all_heatmaps(
             df=df,
             title=full_title,
             save_path=out_file,
-            **style_config
+            **style_config,
+            matrix_key=key
         )
 
         print(
