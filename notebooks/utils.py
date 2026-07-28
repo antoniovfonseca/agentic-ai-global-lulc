@@ -3285,6 +3285,7 @@ def annotate_heatmap(
     show_diagonal: bool = True,
     equalize_diagonal_font: bool = False,
     vmax: Optional[float] = None,
+    matrix_key: Optional[str] = None,
     diagonal_vmax: Optional[float] = None, # New parameter for diagonal-specific vmax
 ) -> None:
     """
@@ -3305,6 +3306,9 @@ def annotate_heatmap(
         If True, uses the same font size for all cells.
     vmax : float, optional
         The maximum scale value for off-diagonal values, used to determine text color threshold.
+    matrix_key : str, optional
+        The key identifying the matrix type (e.g., "sum", "ext") to control
+        diagonal coloring and annotation behavior.
     diagonal_vmax : float, optional
         The maximum value among the diagonal entries, used to determine
         text color on grayscale diagonals.
@@ -3328,13 +3332,21 @@ def annotate_heatmap(
             if i == j:
                 if not show_diagonal:
                     continue
-                # Determine text color based on diagonal's grayscale background
-                if diagonal_vmax is not None and diagonal_vmax > 0:
-                    # If background is >50% gray, use white text, else black.
+                
+                # Define matrices that should have a white diagonal with black text
+                DIAGONAL_WHITE_MATRICES = ["qty_shift", "alt_shift"]
+
+                if matrix_key in DIAGONAL_WHITE_MATRICES:
+                    color = "black"
+                    current_fontsize = fontsize # Use standard font size as requested
+                elif diagonal_vmax is not None and diagonal_vmax > 0:
+                    # Handle grayscale diagonal: adaptive text color
                     normalized_val = val / diagonal_vmax
-                    color = "white" if normalized_val > 0.5 else "black"
+                    color = "white" if normalized_val > 0.5 else "black" # Dark background -> white text
+                    current_fontsize = max(5, fontsize - 4)
                 else:
-                    color = "white" # Default for black diagonal
+                    # Default case for solid black diagonal
+                    color = "white"
                 current_fontsize = max(5, fontsize - 4)  # Make diagonal font smaller
             else:
                 if val >= thresh_red and val > 0:
@@ -3512,9 +3524,8 @@ def plot_heatmap(
         float,
     )
 
-    # Force diagonal to 0 for Alternation Shift and Quantity & Allocation Shift matrices
-    title_clean = title.lower() if title else ""
-    if "alternation shift" in title_clean or "quantity" in title_clean:
+    # Force diagonal to 0 for Shift matrices for mathematical consistency
+    if matrix_key in ["qty_shift", "alt_shift"]:
         np.fill_diagonal(matrix_values, 0.0)
 
     # 4. Prepare scale ignoring diagonal
@@ -3644,6 +3655,7 @@ def plot_heatmap(
     
     # Define which matrices should have grayscale diagonals
     DIAGONAL_GRAYSCALE_MATRICES = ["sum", "ext", "all_exc", "alt_exc", "unacc_ext"]
+    DIAGONAL_WHITE_MATRICES = ["qty_shift", "alt_shift"]
     
     annotate_heatmap_diagonal_vmax = None # Initialize for annotate_heatmap
 
@@ -3664,8 +3676,13 @@ def plot_heatmap(
             interpolation="nearest"
         )
         annotate_heatmap_diagonal_vmax = vmax_diag_current
+    elif matrix_key in DIAGONAL_WHITE_MATRICES:
+        # For white diagonals, do not draw any overlay.
+        # The default plot background is white, and the annotation function
+        # will handle drawing the "0" values.
+        pass
     else:
-        # Original black diagonal overlay for other matrices (e.g., Shift, Indirect)
+        # Fallback to a black diagonal for any other unspecified matrix type.
         matrix_diag = np.ma.masked_where(
             ~diag_mask,
             np.ones_like(matrix_values),
@@ -3856,6 +3873,7 @@ def plot_heatmap(
                 show_diagonal=show_diagonal_values,
                 equalize_diagonal_font=equalize_diagonal_font,
                 vmax=vmax_eff,
+                matrix_key=matrix_key,
                 diagonal_vmax=annotate_heatmap_diagonal_vmax, # Pass the new parameter
             )
         except NameError:
