@@ -3343,11 +3343,11 @@ def annotate_heatmap(
                     # Handle grayscale diagonal: adaptive text color
                     normalized_val = val / diagonal_vmax
                     color = "white" if normalized_val > 0.5 else "black" # Dark background -> white text
-                    current_fontsize = max(5, fontsize - 4)
+                    current_fontsize = max(5, fontsize - 4) # Make font smaller for grayscale
                 else:
                     # Default case for solid black diagonal
                     color = "white"
-                current_fontsize = max(5, fontsize - 4)  # Make diagonal font smaller
+                    current_fontsize = max(5, fontsize - 4) # Make font smaller for black
             else:
                 if val >= thresh_red and val > 0:
                     color = "white"
